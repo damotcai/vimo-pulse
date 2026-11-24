@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: vimo-pulse
+    name: vimo
     runtime: python
     region: singapore
     plan: free
