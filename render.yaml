@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: vimo
+    name: damotcai
     runtime: python
     region: singapore
     plan: free
