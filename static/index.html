@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="vi" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VĨ MÔ PULSE — Kiến trúc Ra Quyết định Đầu tư · VN-Index &amp; Vĩ mô Toàn cầu</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <!-- Top Cross-Asset & Vietnam Index Ticker Strip -->
+  <div class="ticker-bar" aria-label="Chỉ số Việt Nam và Thị trường toàn cầu">
+    <div class="ticker-inner" id="ticker-strip">
+      <div class="ticker-skeleton">Đang kết nối dữ liệu VN-Index &amp; vĩ mô trực tuyến...</div>
+    </div>
+  </div>
+
+  <!-- Sticky Command Workspace Header -->
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <path d="M3 17L9 11L13 15L21 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M16 7H21V12" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div>
+          <div class="brand-title">VĨ MÔ PULSE</div>
+          <div class="brand-sub">Investment Decision Terminal · VN &amp; US</div>
+        </div>
+      </div>
+
+      <!-- Workspace Mode Tabs (New Decision-First Architecture) -->
+      <nav class="workspace-tabs" id="workspace-tabs" role="tablist" aria-label="Không gian làm việc">
+        <button class="ws-tab active" data-tab="strategy" role="tab" aria-selected="true">
+          <span class="ws-key">1</span> Chiến lược &amp; VN-Index
+        </button>
+        <button class="ws-tab" data-tab="macro" role="tab" aria-selected="false">
+          <span class="ws-key">2</span> Lạm phát · PMI · Lao động
+        </button>
+        <button class="ws-tab" data-tab="rates" role="tab" aria-selected="false">
+          <span class="ws-key">3</span> FedWatch &amp; Lợi suất
+        </button>
+        <button class="ws-tab" data-tab="fx" role="tab" aria-selected="false">
+          <span class="ws-key">4</span> Tỷ giá · Vàng · SBV
+        </button>
+        <button class="ws-tab" data-tab="news" role="tab" aria-selected="false">
+          <span class="ws-key">5</span> Lịch &amp; Tin VN
+        </button>
+        <button class="ws-tab ws-tab-all" data-tab="all" role="tab" aria-selected="false" title="Hiển thị toàn bộ các bảng trên một trang">
+          Toàn cảnh
+        </button>
+      </nav>
+
+      <div class="header-actions">
+        <div class="live-status" id="live-status" title="Dữ liệu tự động làm mới mỗi lần bạn truy cập">
+          <span class="status-dot syncing" id="status-dot"></span>
+          <span id="status-text">Đang tải...</span>
+        </div>
+        <button class="btn-icon" id="btn-refresh" type="button" title="Cập nhật dữ liệu mới nhất ngay bây giờ">
+          <svg class="icon-refresh" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+            <path d="M21 3v6h-6"/>
+          </svg>
+          <span>Cập nhật</span>
+        </button>
+        <button class="btn-icon btn-theme" id="btn-theme" type="button" title="Chuyển chế độ Sáng / Tối" aria-label="Chuyển giao diện sáng tối">
+          <svg id="icon-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
+          </svg>
+          <svg id="icon-moon" class="hidden" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- =====================================================================
+         WORKSPACE 1: CHIẾN LƯỢC ĐẦU TƯ & CHỈ SỐ CHỨNG KHOÁN VIỆT NAM
+         ===================================================================== -->
+    <div class="ws-pane active" data-pane="strategy">
+      <!-- TOP DECISION COCKPIT: 3-Column CIO Playbook -->
+      <section class="section">
+        <div class="cockpit-header">
+          <div>
+            <span class="eyebrow">BÀN ĐIỀU KHIỂN QUYẾT ĐỊNH ĐẦU TƯ · TOP-DOWN CIO PLAYBOOK</span>
+            <h1 class="cockpit-title" id="greeting-title">Phương án Đầu tư &amp; Toàn cảnh VN-Index Hôm nay</h1>
+          </div>
+          <div class="cockpit-badges">
+            <div class="stance-pill" id="strategy-stance-badge">
+              <span class="regime-dot"></span>
+              <span id="strategy-stance-text">Đang chấm điểm vĩ mô &amp; thị trường...</span>
+            </div>
+            <div class="regime-badge" id="regime-badge">
+              <span id="regime-text">Chu kỳ vĩ mô...</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="cockpit-grid">
+          <!-- Column 1: Composite Risk-On/Off Score Gauge + 5 Transparent Pillars -->
+          <div class="panel cockpit-card">
+            <div class="panel-head compact">
+              <div>
+                <h2 class="panel-title">La bàn Vĩ mô – Thị trường</h2>
+                <p class="panel-sub">Điểm tổng hợp 0–100 từ 5 trụ cột thực tế</p>
+              </div>
+              <span class="source-tag" id="strategy-score-tag">— / 100</span>
+            </div>
+            <div class="gauge-wrap">
+              <div class="chart-box chart-gauge" id="chart-risk-gauge"></div>
+            </div>
+            <div class="pillars-list" id="strategy-pillars"></div>
+          </div>
+
+          <!-- Column 2: Tactical Asset Allocation Playbook + Risk Profile + Personal Rebalancer -->
+          <div class="panel cockpit-card">
+            <div class="panel-head compact">
+              <div>
+                <h2 class="panel-title">Phương án Phân bổ Tài sản</h2>
+                <p class="panel-sub">Chọn khẩu vị rủi ro &amp; tính tái cân bằng danh mục</p>
+              </div>
+              <div class="segmented" id="risk-profile-group">
+                <button class="seg-btn" data-risk="safe">An toàn</button>
+                <button class="seg-btn active" data-risk="balanced">Cân bằng</button>
+                <button class="seg-btn" data-risk="aggressive">Tấn công</button>
+              </div>
+            </div>
+            <div class="alloc-stack">
+              <div class="donut-wrap">
+                <div class="donut-chart" id="chart-allocation"></div>
+              </div>
+              <div class="alloc-list" id="allocation-list"></div>
+            </div>
+
+            <!-- Interactive Personal Portfolio Rebalancer -->
+            <details class="rebal-details" id="rebal-details">
+              <summary>Cân đối danh mục theo số vốn thực tế của bạn (triệu VND)</summary>
+              <div class="rebal-box">
+                <div class="rebal-input-row">
+                  <label for="rebal-capital">Tổng vốn (triệu VND):</label>
+                  <input type="number" id="rebal-capital" class="rebal-input mono" value="500" min="10" step="50" />
+                </div>
+                <div class="rebal-cur-grid">
+                  <label>CP VN (%)<input type="number" id="cur-eq" class="rebal-mini mono" value="40" min="0" max="100" /></label>
+                  <label>Tiền mặt (%)<input type="number" id="cur-cash" class="rebal-mini mono" value="30" min="0" max="100" /></label>
+                  <label>Vàng (%)<input type="number" id="cur-gold" class="rebal-mini mono" value="20" min="0" max="100" /></label>
+                  <label>USD (%)<input type="number" id="cur-usd" class="rebal-mini mono" value="10" min="0" max="100" /></label>
+                </div>
+                <div class="rebal-results" id="rebal-results"></div>
+              </div>
+            </details>
+
+            <div class="action-callout" id="strategy-action-callout">
+              <div class="action-callout-title">Định hướng hành động hôm nay</div>
+              <p id="strategy-summary-action">Đang tổng hợp khuyến nghị phân bổ...</p>
+            </div>
+          </div>
+
+          <!-- Column 3: Concrete Quantitative Trigger Rules ("Nếu... Thì...") -->
+          <div class="panel cockpit-card">
+            <div class="panel-head compact">
+              <div>
+                <h2 class="panel-title">Kịch bản Hành động “Nếu… Thì…”</h2>
+                <p class="panel-sub">Ngưỡng kỹ thuật &amp; vĩ mô để thay đổi tỷ trọng</p>
+              </div>
+              <span class="source-tag">Kỷ luật</span>
+            </div>
+            <div class="triggers-list" id="strategy-triggers"></div>
+            <div class="strategy-disclaimer">
+              * Mô hình định lượng tổng hợp dữ liệu vĩ mô &amp; kỹ thuật tự động nhằm hỗ trợ nhà đầu tư xây dựng kịch bản quản trị vốn, không phải khuyến nghị mua/bán cổ phiếu cụ thể.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIETNAM STOCK MARKET INDICES HUB (VN-Index, VN30, HNX, UPCoM + Foreign Flow) -->
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <h2 class="section-title">Trung tâm Chỉ số Chứng khoán Việt Nam &amp; Dòng tiền Khối ngoại</h2>
+            <p class="section-desc">Theo dõi VN-Index, VN30, HNX, UPCoM kèm xu hướng MA20/50/200, RSI-14, đối chiếu trực tiếp với USD/VND · DXY · US 10Y và dòng tiền khối ngoại</p>
+          </div>
+          <div class="controls-row">
+            <div class="segmented" id="vn-mode-group">
+              <button class="seg-btn active" data-mode="tech">Kỹ thuật (Nến &amp; MA)</button>
+              <button class="seg-btn" data-mode="overlay">Đối chiếu Vĩ mô</button>
+              <button class="seg-btn" data-mode="ytd">So sánh YTD năm</button>
+            </div>
+            <div class="segmented hidden" id="vn-overlay-group">
+              <button class="seg-btn active" data-overlay="usdvnd">vs USD/VND</button>
+              <button class="seg-btn" data-overlay="dxy">vs DXY</button>
+              <button class="seg-btn" data-overlay="us10y">vs US 10Y</button>
+              <button class="seg-btn" data-overlay="sp500">vs S&amp;P 500</button>
+            </div>
+            <div class="segmented" id="vn-range-group">
+              <button class="seg-btn" data-range="65">3M</button>
+              <button class="seg-btn" data-range="130">6M</button>
+              <button class="seg-btn active" data-range="252">1Y</button>
+              <button class="seg-btn" data-range="756">3Y</button>
+              <button class="seg-btn" data-range="1300">5Y</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4 Clickable Vietnam Index Cards -->
+        <div class="vn-idx-grid" id="vn-idx-cards"></div>
+
+        <!-- Main VN-Index Chart + Right Foreign Flow & Technical Levels -->
+        <div class="grid-vn-main">
+          <div class="panel">
+            <div class="panel-head compact">
+              <div>
+                <h3 class="panel-title" id="vn-chart-title">VN-Index — Phân tích Kỹ thuật (Nến · MA20 / MA50 / MA200 · Khối lượng)</h3>
+                <p class="panel-sub" id="vn-chart-sub">Nhấp vào thẻ chỉ số phía trên để đổi nhanh giữa VN-Index, VN30, HNX và UPCoM</p>
+              </div>
+              <span class="source-tag" id="vn-active-badge">VNINDEX</span>
+            </div>
+            <div class="chart-box chart-xl" id="chart-vn-index"></div>
+            <div class="table-wrap mt-sm hidden" id="vn-ytd-table-wrap">
+              <table class="data-table mono-nums" id="table-vn-yearly">
+                <thead>
+                  <tr>
+                    <th>Năm</th>
+                    <th>Đầu năm</th>
+                    <th>Thấp nhất</th>
+                    <th>Cao nhất</th>
+                    <th>Đóng cửa / Hiện tại</th>
+                    <th>Hiệu suất YTD</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="side-stack">
+            <!-- VN-Index Live P/E Valuation Card -->
+            <div class="panel pe-card" id="vn-pe-card">
+              <div class="panel-head compact">
+                <div>
+                  <h3 class="panel-title">Định giá P/E VN-Index</h3>
+                  <p class="panel-sub" id="vn-pe-sub">So với vùng trung bình 5 năm</p>
+                </div>
+                <span class="rating-pill success" id="vn-pe-badge">—</span>
+              </div>
+              <div class="pe-hero">
+                <div>
+                  <div class="mini-label">P/E Thị trường (TTM)</div>
+                  <div class="pe-main-val mono" id="vn-pe-val">—</div>
+                </div>
+                <div class="pe-right-stats mono" id="vn-pe-stats"></div>
+              </div>
+              <div class="pe-band-wrap">
+                <div class="pe-band-labels mono">
+                  <span>Rẻ (&lt;<strong id="pe-low">12.9x</strong>)</span>
+                  <span>TB 5N: <strong id="pe-mid">14.8x</strong></span>
+                  <span>Đắt (&gt;<strong id="pe-high">16.7x</strong>)</span>
+                </div>
+                <div class="pe-band-track">
+                  <div class="pe-band-marker" id="pe-marker" title="P/E hiện tại"></div>
+                </div>
+                <div class="pe-band-note" id="vn-pe-note">—</div>
+              </div>
+            </div>
+
+            <!-- Foreign & Proprietary (Tự doanh) Net Flow -->
+            <div class="panel">
+              <div class="panel-head compact">
+                <div>
+                  <h3 class="panel-title" id="flow-panel-title">Dòng tiền Khối ngoại &amp; Tự doanh (HOSE)</h3>
+                  <p class="panel-sub" id="vn-liq-sub">Giá trị khớp lệnh &amp; Mua/Bán ròng (tỷ VND)</p>
+                </div>
+                <div class="segmented" id="flow-mode-group">
+                  <button class="seg-btn active" data-flow="foreign">Khối ngoại</button>
+                  <button class="seg-btn" data-flow="prop">Tự doanh</button>
+                  <button class="seg-btn" data-flow="both">So sánh</button>
+                </div>
+              </div>
+              <div class="flow-summary-grid" id="foreign-summary"></div>
+              <div class="chart-box chart-sm" id="chart-foreign-flow"></div>
+            </div>
+
+            <!-- Technical Key Levels Table -->
+            <div class="panel">
+              <div class="panel-head compact">
+                <div>
+                  <h3 class="panel-title" id="vn-levels-title">Mốc Kỹ thuật Quan trọng — VN-Index</h3>
+                  <p class="panel-sub">Hỗ trợ / Kháng cự động &amp; Động lượng RSI</p>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table mono-nums" id="table-vn-levels">
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- LIVE HOSE SECTOR ROTATION PLAYBOOK -->
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <h2 class="section-title">Bản đồ Luân chuyển Nhóm ngành Việt Nam (8 Chỉ số Ngành HOSE)</h2>
+            <p class="section-desc">Kết hợp Sức mạnh Giá tương đối (RS 1 tháng vs VN-Index) &amp; Mức độ hưởng lợi từ bối cảnh vĩ mô hiện tại để chọn ngành ưu tiên</p>
+          </div>
+          <span class="source-tag">Dữ liệu thực HOSE: VNFIN · VNREAL · VNIT · VNIND · VNMAT · VNENE · VNCONS · VNHEAL</span>
+        </div>
+
+        <div class="panel">
+          <div class="grid-sector-playbook">
+            <div>
+              <div class="subcard-head">
+                <span class="subcard-title">Hiệu suất 1 Tháng (%) &amp; Sức mạnh Tương đối (RS vs VN-Index)</span>
+              </div>
+              <div class="chart-box chart-md" id="chart-sectors"></div>
+            </div>
+
+            <div class="table-wrap">
+              <table class="data-table sector-table" id="table-sectors">
+                <thead>
+                  <tr>
+                    <th>Nhóm ngành (HOSE)</th>
+                    <th>CP Đại diện</th>
+                    <th>Đánh giá</th>
+                    <th>Điểm</th>
+                    <th>1M %</th>
+                    <th>RS vs VNI</th>
+                    <th>YTD %</th>
+                    <th>Chiến thuật &amp; Động lực Vĩ mô</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- 8 Representative Bellwether Stocks Grid (1 Stock per Sector) -->
+          <div class="leaders-section">
+            <div class="leaders-head">
+              <div>
+                <h3 class="panel-title">Cổ phiếu Đại diện 8 Nhóm ngành (1 Cổ phiếu Đầu ngành / Ngành)</h3>
+                <p class="panel-sub">Theo dõi trực tuyến Giá, P/E, P/B, ROE %, Vốn hóa &amp; Cổ tức của 8 mã đầu ngành HOSE (VCB · VHM · FPT · GMD · HPG · GAS · VNM · DHG)</p>
+              </div>
+              <span class="source-tag">Nguồn: Simplize Live</span>
+            </div>
+            <div class="leaders-grid" id="leaders-grid"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PERSONAL STOCK WATCHLIST (ADD / REMOVE ANY VIETNAM TICKER LIVE) -->
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <h2 class="section-title">Watchlist Cổ phiếu của Bạn (Tự thêm mã · Cơ bản + Kỹ thuật Live)</h2>
+            <p class="section-desc">Nhập bất kỳ mã cổ phiếu VN nào bạn đang cầm hoặc canh mua (vd: MBB, TCB, SSI, MWG, KBC, PVD...) để soi P/E, ROE, MA50/200, RSI-14 &amp; tín hiệu gom hàng</p>
+          </div>
+          <div class="watchlist-toolbar">
+            <input type="text" id="wl-input" class="wl-input mono" placeholder="Nhập mã CP (vd: TCB, ACB, PVD)..." maxlength="40" aria-label="Thêm mã cổ phiếu vào watchlist" />
+            <button type="button" id="wl-add-btn" class="btn-primary">+ Thêm mã</button>
+            <button type="button" id="wl-refresh-btn" class="btn-icon" title="Làm mới dữ liệu Watchlist">Làm mới</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="wl-grid" id="watchlist-grid">
+            <div class="empty-state">Đang tải dữ liệu Watchlist cổ phiếu của bạn...</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- MORNING BRIEFING & 6 CORE MACRO KPI CARDS (QUICK JUMP TO DEEP-DIVE TABS) -->
+      <section class="section">
+        <div class="briefing-card" id="briefing-card">
+          <div class="briefing-header compact-mb">
+            <div>
+              <span class="eyebrow">TÓM TẮT VĨ MÔ SÁNG NAY</span>
+              <h2 class="section-title">6 Chỉ số Cốt lõi &amp; Điểm nhấn Điều hành</h2>
+            </div>
+            <span class="panel-sub">Nhấp vào bất kỳ thẻ nào để mở tab phân tích chuyên sâu</span>
+          </div>
+          <div class="briefing-bullets" id="briefing-bullets">
+            <div class="skeleton-line"></div>
+            <div class="skeleton-line short"></div>
+          </div>
+        </div>
+
+        <div class="kpi-grid" id="kpi-grid">
+          <article class="kpi-card" data-jump-tab="macro">
+            <div class="kpi-top">
+              <span class="kpi-label">CPI Mỹ (YoY)</span>
+              <span class="kpi-period" id="kpi-cpi-period">—</span>
+            </div>
+            <div class="kpi-main">
+              <span class="kpi-value mono" id="kpi-cpi-val">—</span>
+              <span class="delta-pill" id="kpi-cpi-delta">—</span>
+            </div>
+            <div class="kpi-spark" id="spark-cpi"></div>
+            <div class="kpi-footer" id="kpi-cpi-sub">Core CPI: — · PPI: —</div>
+          </article>
+
+          <article class="kpi-card" data-jump-tab="macro">
+            <div class="kpi-top">
+              <span class="kpi-label">Core PCE Mỹ (YoY)</span>
+              <span class="kpi-period" id="kpi-pce-period">—</span>
+            </div>
+            <div class="kpi-main">
+              <span class="kpi-value mono" id="kpi-pce-val">—</span>
+              <span class="delta-pill" id="kpi-pce-delta">—</span>
+            </div>
+            <div class="kpi-spark" id="spark-pce"></div>
+            <div class="kpi-footer" id="kpi-pce-sub">PCE toàn phần: — · Mục tiêu Fed: 2.0%</div>
+          </article>
+
+          <article class="kpi-card" data-jump-tab="macro">
+            <div class="kpi-top">
+              <span class="kpi-label">PMI Sản xuất (Mỹ / VN)</span>
+              <span class="kpi-period" id="kpi-pmi-period">—</span>
+            </div>
+            <div class="kpi-main kpi-dual-main">
+              <div>
+                <span class="mini-tag">US ISM</span>
+                <span class="kpi-value mono" id="kpi-us-pmi-val">—</span>
+              </div>
+              <div class="kpi-divider"></div>
+              <div>
+                <span class="mini-tag">VN S&amp;P</span>
+                <span class="kpi-value mono" id="kpi-vn-pmi-val">—</span>
+              </div>
+            </div>
+            <div class="kpi-spark" id="spark-pmi"></div>
+            <div class="kpi-footer" id="kpi-pmi-sub">ISM Dịch vụ: — · Ngưỡng mở rộng &gt;50</div>
+          </article>
+
+          <article class="kpi-card" data-jump-tab="macro">
+            <div class="kpi-top">
+              <span class="kpi-label">Tỉ lệ Thất nghiệp Mỹ</span>
+              <span class="kpi-period" id="kpi-unemp-period">—</span>
+            </div>
+            <div class="kpi-main">
+              <span class="kpi-value mono" id="kpi-unemp-val">—</span>
+              <span class="delta-pill" id="kpi-unemp-delta">—</span>
+            </div>
+            <div class="kpi-spark" id="spark-unemp"></div>
+            <div class="kpi-footer" id="kpi-unemp-sub">Việc làm phi nông nghiệp (NFP): —</div>
+          </article>
+
+          <article class="kpi-card" data-jump-tab="rates">
+            <div class="kpi-top">
+              <span class="kpi-label">Lãi suất Fed &amp; Kỳ vọng</span>
+              <span class="kpi-period" id="kpi-fed-period">—</span>
+            </div>
+            <div class="kpi-main">
+              <span class="kpi-value kpi-value-sm mono" id="kpi-fed-val">—</span>
+              <span class="delta-pill" id="kpi-fed-prob">—</span>
+            </div>
+            <div class="kpi-spark" id="spark-fed"></div>
+            <div class="kpi-footer" id="kpi-fed-sub">EFFR: — · SOFR: —</div>
+          </article>
+
+          <article class="kpi-card" data-jump-tab="fx">
+            <div class="kpi-top">
+              <span class="kpi-label">Tỷ giá USD/VND (VCB Bán)</span>
+              <span class="kpi-period" id="kpi-fx-period">Live</span>
+            </div>
+            <div class="kpi-main">
+              <span class="kpi-value kpi-value-sm mono" id="kpi-fx-val">—</span>
+              <span class="delta-pill" id="kpi-fx-dxy">DXY —</span>
+            </div>
+            <div class="kpi-spark" id="spark-fx"></div>
+            <div class="kpi-footer" id="kpi-fx-sub">Mua CK: — · Spot: —</div>
+          </article>
+        </div>
+      </section>
+    </div>
+
+    <!-- =====================================================================
+         WORKSPACE 2: LẠM PHÁT (CPI/PCE/PPI), PMI & LAO ĐỘNG
+         ===================================================================== -->
+    <div class="ws-pane" data-pane="macro">
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <h2 class="section-title">Lạm phát &amp; So sánh Các Năm</h2>
+            <p class="section-desc">CPI, Core CPI, PCE, Core PCE &amp; PPI Mỹ (BLS &amp; BEA) · Chuyển nhanh giữa chuỗi lịch sử và biểu đồ chồng các năm (2022–2026)</p>
+          </div>
+          <div class="controls-row">
+            <div class="segmented" id="inf-mode-group" role="tablist">
+              <button class="seg-btn active" data-mode="timeline">Chuỗi thời gian</button>
+              <button class="seg-btn" data-mode="yearly">So sánh các năm</button>
+              <button class="seg-btn" data-mode="mom">Biến động MoM (%)</button>
+            </div>
+            <div class="segmented" id="inf-range-group">
+              <button class="seg-btn" data-range="12">1Y</button>
+              <button class="seg-btn" data-range="36">3Y</button>
+              <button class="seg-btn active" data-range="60">5Y</button>
+              <button class="seg-btn" data-range="120">10Y</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-toolbar">
+            <div class="pill-tabs" id="inf-metric-tabs">
+              <button class="pill-btn active" data-metric="all">Tổng hợp (CPI · Core CPI · Core PCE)</button>
+              <button class="pill-btn" data-metric="us_cpi">CPI Mỹ</button>
+              <button class="pill-btn" data-metric="us_core_cpi">Core CPI Mỹ</button>
+              <button class="pill-btn" data-metric="us_core_pce">Core PCE Mỹ</button>
+              <button class="pill-btn" data-metric="us_pce">PCE Mỹ</button>
+              <button class="pill-btn" data-metric="us_ppi">PPI Mỹ</button>
+            </div>
+            <span class="source-tag">Nguồn: U.S. BLS &amp; BEA (DBnomics)</span>
+          </div>
+
+          <div class="grid-2-asym">
+            <div class="chart-wrap">
+              <div class="chart-box chart-lg" id="chart-inflation"></div>
+            </div>
+
+            <div class="side-stack">
+              <div class="subcard">
+                <div class="subcard-head">
+                  <span class="subcard-title" id="inf-table-title">Thống kê theo năm — CPI Mỹ (YoY %)</span>
+                </div>
+                <div class="table-wrap">
+                  <table class="data-table mono-nums" id="table-inf-yearly">
+                    <thead>
+                      <tr>
+                        <th>Năm</th>
+                        <th>TB năm</th>
+                        <th>Đỉnh</th>
+                        <th>Đáy</th>
+                        <th>Mới nhất</th>
+                      </tr>
+                    </thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="subcard vn-cpi-card" id="vn-cpi-card">
+                <div class="subcard-head">
+                  <span class="subcard-title">Lạm phát Việt Nam (GSO · 2026)</span>
+                  <span class="badge-soft" id="vn-cpi-period">—</span>
+                </div>
+                <div class="vn-cpi-metrics" id="vn-cpi-metrics"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <h2 class="section-title">PMI Sản xuất / Dịch vụ &amp; Thị trường Lao động</h2>
+            <p class="section-desc">Đo lường sức khỏe sản xuất Mỹ (ISM) vs Việt Nam (S&amp;P Global) quanh ngưỡng 50 điểm &amp; Tỉ lệ thất nghiệp / Việc làm NFP Mỹ</p>
+          </div>
+        </div>
+
+        <div class="grid-2-equal">
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3 class="panel-title">Chỉ số Quản trị Mua hàng (PMI)</h3>
+                <p class="panel-sub">Trên 50 = Mở rộng sản xuất · Dưới 50 = Thu hẹp</p>
+              </div>
+              <div class="segmented" id="pmi-mode-group">
+                <button class="seg-btn active" data-mode="timeline">Chuỗi thời gian</button>
+                <button class="seg-btn" data-mode="yearly_vn">So sánh năm (VN)</button>
+                <button class="seg-btn" data-mode="yearly_us">So sánh năm (Mỹ)</button>
+              </div>
+            </div>
+            <div class="chart-box chart-md" id="chart-pmi"></div>
+            <div class="pmi-footer" id="pmi-official-links"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3 class="panel-title">Thất nghiệp &amp; Việc làm Mỹ (UNRATE · NFP)</h3>
+                <p class="panel-sub">Tỉ lệ thất nghiệp (%) kết hợp số việc làm phi nông nghiệp tạo mới (nghìn)</p>
+              </div>
+              <div class="segmented" id="labor-mode-group">
+                <button class="seg-btn active" data-mode="dual">Thất nghiệp &amp; NFP</button>
+                <button class="seg-btn" data-mode="yearly">So sánh các năm</button>
+              </div>
+            </div>
+            <div class="chart-box chart-md" id="chart-labor"></div>
+            <div class="panel-footnote">Nguồn: U.S. Bureau of Labor Statistics (LNS14000000 &amp; CES0000000001)</div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- =====================================================================
+         WORKSPACE 3: FEDWATCH & ĐƯỜNG CONG LỢI SUẤT
+         ===================================================================== -->
+    <div class="ws-pane" data-pane="rates">
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <h2 class="section-title">Lãi suất Điều hành, Xác suất Nâng/Hạ Lãi suất &amp; Đường cong Lợi suất</h2>
+            <p class="section-desc">Định giá trực tiếp từ HĐTL Fed Funds 30 ngày (CBOT ZQ · chuẩn CME FedWatch), NY Fed EFFR/SOFR &amp; Đường cong Trái phiếu Mỹ (Fed H.15)</p>
+          </div>
+        </div>
+
+        <div class="grid-2-rates">
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3 class="panel-title">Xác suất Nâng / Giữ / Hạ Lãi suất Fed (Live Futures)</h3>
+                <p class="panel-sub" id="fedwatch-subtitle">Khung mục tiêu hiện tại: — · EFFR: —</p>
+              </div>
+              <div class="segmented" id="fed-mode-group">
+                <button class="seg-btn active" data-mode="path">Lộ trình &amp; Lịch sử</button>
+                <button class="seg-btn" data-mode="probs">Biểu đồ Xác suất</button>
+              </div>
+            </div>
+
+            <div class="fedwatch-cards" id="fedwatch-cards"></div>
+            <div class="chart-box chart-md" id="chart-fed-path"></div>
+
+            <details class="rate-history-details" open>
+              <summary>Lịch sử các lần Nâng / Hạ lãi suất gần đây của Fed (NY Fed)</summary>
+              <div class="table-wrap mt-sm">
+                <table class="data-table mono-nums" id="table-fed-changes">
+                  <thead>
+                    <tr>
+                      <th>Ngày hiệu lực</th>
+                      <th>Hành động</th>
+                      <th>Biến động</th>
+                      <th>Khung trước</th>
+                      <th>Khung mới</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </details>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3 class="panel-title">Đường cong Lợi suất Trái phiếu Mỹ</h3>
+                <p class="panel-sub" id="yc-subtitle">So sánh Hôm nay vs 1 tháng trước vs 1 năm trước (1M → 30Y)</p>
+              </div>
+              <div class="segmented" id="yc-mode-group">
+                <button class="seg-btn active" data-mode="curve">Đường cong</button>
+                <button class="seg-btn" data-mode="spread">Spread 10Y–2Y</button>
+              </div>
+            </div>
+
+            <div class="yc-metrics" id="yc-metrics"></div>
+            <div class="chart-box chart-md" id="chart-yield-curve"></div>
+            <div class="panel-footnote">Nguồn: Federal Reserve Board Statistical Release H.15 (Constant Maturity Treasuries)</div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- =====================================================================
+         WORKSPACE 4: TỶ GIÁ USD/VND, SBV (TỰ BỎ QUA NẾU KHÔNG CÓ) & VN VS MỸ
+         ===================================================================== -->
+    <div class="ws-pane" data-pane="fx">
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <h2 class="section-title">Tỷ giá USD/VND, Chỉ số DXY &amp; Điều hành Ngoại hối</h2>
+            <p class="section-desc">So sánh song hành USD/VND với sức mạnh đồng Đô la (DXY), biến động YTD qua các năm &amp; Bảng tỷ giá thương mại Vietcombank</p>
+          </div>
+          <div class="controls-row">
+            <div class="segmented" id="fx-mode-group">
+              <button class="seg-btn active" data-mode="dual">USD/VND vs DXY</button>
+              <button class="seg-btn" data-mode="ytd">So sánh YTD các năm</button>
+            </div>
+            <div class="segmented" id="fx-range-group">
+              <button class="seg-btn" data-range="90">3M</button>
+              <button class="seg-btn active" data-range="260">1Y</button>
+              <button class="seg-btn" data-range="780">3Y</button>
+              <button class="seg-btn" data-range="1400">5Y</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="fx-layout" id="fx-layout">
+          <div class="panel fx-chart-panel">
+            <div class="panel-head">
+              <div>
+                <h3 class="panel-title" id="fx-chart-title">Diễn biến USD/VND Spot &amp; Chỉ số DXY</h3>
+                <p class="panel-sub" id="fx-chart-sub">Đường kép 2 trục · Quan sát độ nhạy tỷ giá Việt Nam theo đồng USD toàn cầu</p>
+              </div>
+            </div>
+            <div class="chart-box chart-lg" id="chart-fx"></div>
+            <div class="table-wrap mt-sm" id="fx-ytd-summary-wrap">
+              <table class="data-table mono-nums" id="table-fx-yearly">
+                <thead>
+                  <tr>
+                    <th>Năm</th>
+                    <th>Đầu năm</th>
+                    <th>Thấp nhất</th>
+                    <th>Cao nhất</th>
+                    <th>Cuối kỳ / Hiện tại</th>
+                    <th>Biến động YTD</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="fx-side-col">
+            <!-- Conditional SBV Card: Automatically HIDDEN when SBV data is unavailable -->
+            <div class="panel sbv-card hidden" id="sbv-card">
+              <div class="panel-head compact">
+                <div>
+                  <h3 class="panel-title">Ngân hàng Nhà nước (SBV)</h3>
+                  <p class="panel-sub" id="sbv-date-sub">Tỷ giá trung tâm &amp; Biên độ ±5%</p>
+                </div>
+                <span class="badge-live">SBV Live</span>
+              </div>
+              <div class="sbv-hero">
+                <div>
+                  <div class="mini-label">Tỷ giá trung tâm</div>
+                  <div class="sbv-rate mono" id="sbv-central">—</div>
+                </div>
+                <div class="sbv-ref-box" id="sbv-ref-box">
+                  <div class="mini-label">Sở GD NHNN (Mua / Bán)</div>
+                  <div class="sbv-ref-vals mono" id="sbv-ref-vals">—</div>
+                </div>
+              </div>
+              <div class="sbv-band-wrap">
+                <div class="sbv-band-labels mono">
+                  <span>Sàn -5%: <strong id="sbv-floor">—</strong></span>
+                  <span>Trần +5%: <strong id="sbv-ceiling">—</strong></span>
+                </div>
+                <div class="sbv-band-track">
+                  <div class="sbv-band-center" title="Tỷ giá trung tâm"></div>
+                  <div class="sbv-band-marker" id="sbv-vcb-marker" title="Giá bán VCB hiện tại"></div>
+                </div>
+                <div class="sbv-band-note" id="sbv-gap-note">—</div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head compact">
+                <div>
+                  <h3 class="panel-title">Bảng Tỷ giá Vietcombank</h3>
+                  <p class="panel-sub" id="vcb-updated">Cập nhật trực tuyến từ VCB XML</p>
+                </div>
+                <span class="source-tag">VCB</span>
+              </div>
+              <div class="vcb-usd-hero" id="vcb-usd-hero"></div>
+              <div class="table-wrap table-scroll-sm">
+                <table class="data-table mono-nums" id="table-vcb">
+                  <thead>
+                    <tr>
+                      <th>Mã</th>
+                      <th>Mua TM</th>
+                      <th>Chuyển khoản</th>
+                      <th>Bán ra</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIETNAM GOLD (SJC & RING 9999) VS WORLD GOLD CONVERTED SPREAD -->
+      <section class="section" id="sec-gold-vn">
+        <div class="section-head">
+          <div>
+            <h2 class="section-title">Giá Vàng SJC / Nhẫn 9999 vs Vàng Thế giới Quy đổi</h2>
+            <p class="section-desc">Đo lường độ chênh lệch vàng trong nước so với giá XAU thế giới quy đổi để quyết định thời điểm mua vàng phòng hộ</p>
+          </div>
+          <span class="source-tag" id="gold-updated-tag">SJC &amp; CafeF Live</span>
+        </div>
+
+        <div class="panel">
+          <div class="gold-grid">
+            <div class="gold-cards-col">
+              <div class="gold-kpi-grid" id="gold-kpi-grid"></div>
+              <div class="gold-advice-box" id="gold-advice-box">Đang tải dữ liệu giá vàng SJC &amp; Thế giới...</div>
+            </div>
+            <div>
+              <div class="subcard-head">
+                <span class="subcard-title">Diễn biến Vàng miếng SJC 1 Tháng gần nhất (triệu VND/lượng)</span>
+              </div>
+              <div class="chart-box chart-sm" id="chart-gold-vn"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <h2 class="section-title">So sánh Vĩ mô Đa năm: Việt Nam vs Hoa Kỳ</h2>
+            <p class="section-desc">Đối chiếu chu kỳ tăng trưởng GDP, lạm phát CPI và tỉ lệ thất nghiệp giữa Việt Nam và Mỹ qua các năm (World Bank WDI)</p>
+          </div>
+          <div class="segmented" id="wb-metric-group">
+            <button class="seg-btn active" data-metric="gdp_growth">Tăng trưởng GDP (%)</button>
+            <button class="seg-btn" data-metric="cpi_annual">Lạm phát CPI (%)</button>
+            <button class="seg-btn" data-metric="unemployment">Thất nghiệp (%)</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="grid-2-asym">
+            <div class="chart-box chart-md" id="chart-vn-us"></div>
+            <div class="subcard">
+              <div class="subcard-head">
+                <span class="subcard-title">Bảng đối chiếu Nhanh (Việt Nam vs Mỹ)</span>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table mono-nums" id="table-scorecard">
+                  <thead>
+                    <tr>
+                      <th>Chỉ số Vĩ mô</th>
+                      <th>Việt Nam</th>
+                      <th>Hoa Kỳ</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- =====================================================================
+         WORKSPACE 5: LỊCH KINH TẾ (GMT+7) & TIN CHÍNH SÁCH VN / SBV
+         ===================================================================== -->
+    <div class="ws-pane" data-pane="news">
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <h2 class="section-title">Lịch Kinh tế Tuần này &amp; Tin Chính sách Việt Nam / SBV</h2>
+            <p class="section-desc">Lịch công bố dữ liệu quan trọng quy đổi sang giờ Việt Nam (GMT+7) &amp; Dòng tin chính sách tiền tệ, tỷ giá, vĩ mô cập nhật liên tục</p>
+          </div>
+        </div>
+
+        <div class="grid-2-cal-news">
+          <div class="panel">
+            <div class="panel-head compact">
+              <div>
+                <h3 class="panel-title">Lịch Kinh tế (Giờ VN · GMT+7)</h3>
+                <p class="panel-sub">Theo dõi CPI, PCE, PMI, NFP, FOMC trong tuần</p>
+              </div>
+              <div class="segmented" id="cal-filter-group">
+                <button class="seg-btn active" data-filter="high">Quan trọng</button>
+                <button class="seg-btn" data-filter="usd">Chỉ USD</button>
+                <button class="seg-btn" data-filter="all">Tất cả</button>
+              </div>
+            </div>
+            <div class="calendar-list" id="calendar-list"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head compact">
+              <div>
+                <h3 class="panel-title">Tin Chính sách VN, SBV &amp; Vĩ mô</h3>
+                <p class="panel-sub">Tổng hợp tự động từ CafeF, VnEconomy, VnExpress &amp; Google News</p>
+              </div>
+            </div>
+            <div class="news-controls">
+              <div class="pill-tabs" id="news-cat-tabs">
+                <button class="pill-btn active" data-cat="ALL">Tất cả</button>
+                <button class="pill-btn" data-cat="SBV & Tiền tệ">SBV &amp; Tiền tệ</button>
+                <button class="pill-btn" data-cat="Tỷ giá & Ngoại hối">Tỷ giá</button>
+                <button class="pill-btn" data-cat="Lạm phát & PMI">Lạm phát &amp; PMI</button>
+                <button class="pill-btn" data-cat="Chính sách VN">Chính sách VN</button>
+                <button class="pill-btn" data-cat="Fed & Toàn cầu">Fed &amp; Quốc tế</button>
+              </div>
+              <input type="search" class="search-input" id="news-search" placeholder="Tìm nhanh (vd: SBV, OMO, lãi suất, tỷ giá, Fed, CPI, VN-Index)..." aria-label="Tìm kiếm tin tức vĩ mô" />
+            </div>
+            <div class="news-list" id="news-list"></div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+      <div>
+        <strong>VĨ MÔ PULSE</strong> · Phím tắt chuyển nhanh tab: <code class="mono">1</code>–<code class="mono">5</code> · <code class="mono">0</code> Toàn cảnh · Giờ Việt Nam (UTC+7)
+      </div>
+      <div class="source-pills" id="footer-sources"></div>
+    </div>
+  </footer>
+</body>
+</html>
