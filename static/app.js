@@ -24,9 +24,19 @@
     return { capital: 500, eq: 40, cash: 30, gold: 20, usd: 10 };
   }
 
+  const TAB_TITLES = {
+    strategy: "Chiến lược & VN-Index",
+    macro: "Lạm phát · PMI · Lao động",
+    rates: "FedWatch & Lợi suất",
+    fx: "Tỷ giá · Vàng SJC · SBV",
+    news: "Lịch Mỹ ★★★ & Tin Chính sách VN",
+    all: "Xem Toàn cảnh Terminal",
+  };
+
   const state = {
     data: null,
     theme: localStorage.getItem("vimo_theme") || "dark",
+    sidebarCollapsed: localStorage.getItem("vimo_sidebar") === "1",
     activeTab: "strategy", // strategy | macro | rates | fx | news | all
     riskProfile: localStorage.getItem("vimo_risk") || "balanced", // safe | balanced | aggressive
     rebal: loadStoredRebal(),
@@ -47,13 +57,15 @@
     fxMode: "dual",        // dual | ytd
     fxRange: 260,          // 90 | 260 | 780 | 1400
     wbMetric: "gdp_growth",// gdp_growth | cpi_annual | unemployment
-    calFilter: "high",     // high | usd | all
+    calFilter: "all",      // all | upcoming | released
     newsCat: "ALL",
     newsQuery: "",
   };
 
   const charts = {};
-  const YEAR_COLORS = ["#64748b", "#818cf8", "#f59e0b", "#10b981", "#38bdf8", "#f43f5e"];
+  let calPollTimer = null;
+  let calSyncBusy = false;
+  const YEAR_COLORS = ["#64748b", "#6366f1", "#d97706", "#059669", "#0284c7", "#e11d48"];
 
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -89,17 +101,38 @@
   function getThemeTokens() {
     const isLight = state.theme === "light";
     return {
-      text: isLight ? "#0f172a" : "#e2e8f0",
-      muted: isLight ? "#64748b" : "#94a3b8",
-      grid: isLight ? "rgba(15, 23, 42, 0.08)" : "rgba(148, 163, 184, 0.11)",
-      tooltipBg: isLight ? "rgba(255, 255, 255, 0.97)" : "rgba(14, 22, 37, 0.96)",
-      tooltipBorder: isLight ? "rgba(15, 23, 42, 0.14)" : "rgba(148, 163, 184, 0.25)",
-      accent: isLight ? "#0284c7" : "#38bdf8",
-      emerald: isLight ? "#059669" : "#10b981",
-      rose: isLight ? "#e11d48" : "#f43f5e",
-      amber: isLight ? "#d97706" : "#f59e0b",
-      violet: isLight ? "#7c3aed" : "#a78bfa",
+      text: isLight ? "#0f172a" : "#f1f5f9",
+      muted: isLight ? "#334155" : "#cbd5e1",
+      subtle: isLight ? "#475569" : "#94a3b8",
+      grid: isLight ? "rgba(15, 23, 42, 0.10)" : "rgba(148, 163, 184, 0.14)",
+      tooltipBg: isLight ? "#ffffff" : "#0f172a",
+      tooltipBorder: isLight ? "#94a3b8" : "rgba(148, 163, 184, 0.34)",
+      cardBg: isLight ? "#ffffff" : "#111a2c",
+      accent: isLight ? "#0369a1" : "#38bdf8",
+      emerald: isLight ? "#047857" : "#34d399",
+      rose: isLight ? "#be123c" : "#fb7185",
+      amber: isLight ? "#b45309" : "#fbbf24",
+      violet: isLight ? "#6d28d9" : "#c084fc",
     };
+  }
+
+  function getAllocColor(key, rawColor) {
+    const t = getThemeTokens();
+    const map = {
+      vn_equity: t.emerald,
+      vnd_cash: t.accent,
+      gold: t.amber,
+      usd_assets: t.violet,
+    };
+    return map[key] || rawColor;
+  }
+
+  function resizeVisibleCharts() {
+    Object.values(charts).forEach((ch) => {
+      if (ch && ch.getDom() && ch.getDom().offsetParent !== null) {
+        ch.resize();
+      }
+    });
   }
 
   function getChart(id) {
@@ -121,21 +154,33 @@
       borderColor: t.tooltipBorder,
       borderWidth: 1,
       textStyle: { color: t.text, fontSize: 12, fontFamily: "JetBrains Mono, Inter, sans-serif" },
-      axisPointer: { type: "cross", lineStyle: { color: t.muted, type: "dashed" } },
+      axisPointer: { type: "cross", lineStyle: { color: t.subtle, type: "dashed" } },
     };
   }
 
   function applyTheme(theme) {
-    state.theme = theme;
-    document.documentElement.setAttribute("data-theme", theme);
-    localStorage.setItem("vimo_theme", theme);
-    const sun = $("#icon-sun");
-    const moon = $("#icon-moon");
-    if (sun && moon) {
-      sun.classList.toggle("hidden", theme === "light");
-      moon.classList.toggle("hidden", theme !== "light");
-    }
+    const valid = theme === "light" ? "light" : "dark";
+    state.theme = valid;
+    document.documentElement.setAttribute("data-theme", valid);
+    localStorage.setItem("vimo_theme", valid);
+    $$("#theme-switch .theme-opt").forEach((btn) => {
+      const isAct = btn.dataset.setTheme === valid;
+      btn.classList.toggle("active", isAct);
+      btn.setAttribute("aria-pressed", isAct ? "true" : "false");
+    });
     if (state.data) renderVisibleWorkspace();
+  }
+
+  function applySidebarState(collapsed) {
+    state.sidebarCollapsed = !!collapsed;
+    localStorage.setItem("vimo_sidebar", state.sidebarCollapsed ? "1" : "0");
+    const shell = $("#app-shell");
+    if (shell) shell.classList.toggle("sidebar-collapsed", state.sidebarCollapsed);
+    setTimeout(resizeVisibleCharts, 250);
+  }
+
+  function closeMobileDrawer() {
+    $("#app-shell")?.classList.remove("mobile-open");
   }
 
   function setStatus(kind, text) {
@@ -163,6 +208,10 @@
     state.activeTab = tab;
     const isAll = tab === "all";
     document.body.classList.toggle("view-all", isAll);
+    closeMobileDrawer();
+
+    const titleEl = $("#active-view-title");
+    if (titleEl) titleEl.textContent = TAB_TITLES[tab] || "VĨ MÔ PULSE";
 
     $$("#workspace-tabs .ws-tab").forEach((btn) => {
       const active = btn.dataset.tab === tab;
@@ -179,12 +228,13 @@
     if (state.data) {
       requestAnimationFrame(() => {
         renderVisibleWorkspace();
-        Object.values(charts).forEach((ch) => {
-          if (ch && ch.getDom() && ch.getDom().offsetParent !== null) {
-            ch.resize();
-          }
-        });
+        resizeVisibleCharts();
       });
+    }
+
+    // Whenever user opens the Calendar tab, trigger an ultra-fast live US 3-star sync!
+    if (tab === "news" || tab === "all") {
+      refreshCalendarOnly(false);
     }
   }
 
@@ -327,12 +377,12 @@
             radius: ["60%", "88%"],
             center: ["50%", "50%"],
             avoidLabelOverlap: false,
-            itemStyle: { borderRadius: 5, borderColor: state.theme === "light" ? "#fff" : "#0e1625", borderWidth: 2 },
+            itemStyle: { borderRadius: 5, borderColor: t.cardBg, borderWidth: 2 },
             label: { show: false },
             data: alloc.map((a) => ({
               value: a.weight,
               name: a.name,
-              itemStyle: { color: a.color },
+              itemStyle: { color: getAllocColor(a.key, a.color) },
             })),
           },
         ],
@@ -342,19 +392,20 @@
     const allocList = $("#allocation-list");
     if (allocList) {
       allocList.innerHTML = alloc
-        .map(
-          (a) => `
+        .map((a) => {
+          const col = getAllocColor(a.key, a.color);
+          return `
           <div class="alloc-row">
             <div class="alloc-row-top">
               <span class="alloc-name">
-                <span class="alloc-dot" style="background:${a.color}"></span>
+                <span class="alloc-dot" style="background:${col}"></span>
                 <span>${esc(a.name)}</span>
               </span>
-              <span class="alloc-pct" style="color:${a.color}">${a.weight}%</span>
+              <span class="alloc-pct" style="color:${col}">${a.weight}%</span>
             </div>
             <div class="alloc-reason">${esc(a.reason)}</div>
-          </div>`
-        )
+          </div>`;
+        })
         .join("");
     }
     renderRebalancer(alloc);
@@ -377,6 +428,16 @@
     }
     $("#strategy-score-tag").textContent = `${st.total_score} / 100 điểm`;
     $("#strategy-summary-action").textContent = st.summary_action || "";
+
+    // Sync Sidebar Footer Score Box
+    const sbVal = $("#sb-score-val");
+    const sbSub = $("#sb-score-sub");
+    if (sbVal) {
+      const sc = st.total_score ?? 50;
+      sbVal.textContent = `${sc}/100`;
+      sbVal.style.color = sc >= 70 ? t.emerald : sc >= 45 ? t.amber : t.rose;
+    }
+    if (sbSub) sbSub.textContent = st.stance?.short || "Sẵn sàng";
 
     // 1. Risk-On / Risk-Off Gauge
     const chGauge = getChart("chart-risk-gauge");
@@ -409,7 +470,7 @@
               show: true,
               showAbove: true,
               size: 8,
-              itemStyle: { color: t.text, borderWidth: 2, borderColor: state.theme === "light" ? "#fff" : "#0e1625" },
+              itemStyle: { color: t.text, borderWidth: 2, borderColor: t.cardBg },
             },
             axisTick: { show: false },
             splitLine: { length: 7, distance: -13, lineStyle: { color: t.tooltipBg, width: 2 } },
@@ -2320,49 +2381,184 @@
   }
 
   // =========================================================================
-  // 9. Workspace 5: Economic Calendar (GMT+7) & News
+  // 9. Workspace 5: Real-Time US 3-Star Economic Calendar (GMT+7) & News
   // =========================================================================
+
+  function formatCountdownVi(eventTs) {
+    const diff = Math.round(eventTs - Date.now() / 1000);
+    if (diff <= 0) return "";
+    const d = Math.floor(diff / 86400);
+    const h = Math.floor((diff % 86400) / 3600);
+    const m = Math.floor((diff % 3600) / 60);
+    if (d > 0) return `Còn ${d} ngày ${h}g`;
+    if (h > 0) return `Còn ${h}g ${m}p`;
+    return `Còn ${Math.max(1, m)} phút`;
+  }
+
+  function renderUsCalStrip(data) {
+    const strip = $("#us-cal-strip");
+    if (!strip) return;
+    const events = data?.calendar?.events || [];
+    if (!events.length) {
+      strip.classList.add("hidden");
+      return;
+    }
+    // Highlight up to 2 most recent just-released (or today's actuals) + next 2 upcoming US 3-star events
+    const released = events.filter((e) => e.has_actual).slice(-2).reverse();
+    const upcoming = events.filter((e) => e.upcoming).slice(0, 2);
+    const chips = [];
+
+    released.forEach((ev) => {
+      chips.push(`
+        <span class="us-cal-chip released" title="${esc(ev.title)} (${esc(ev.date_vn)} ${esc(ev.time_vn)})">
+          <span>🇺🇸 ★★★</span>
+          <span>${esc(ev.title.split("·")[0].trim())}:</span>
+          <strong>${esc(ev.actual)}</strong>
+          <span style="opacity:.8">(DB: ${esc(ev.forecast)})</span>
+        </span>`);
+    });
+    upcoming.forEach((ev) => {
+      chips.push(`
+        <span class="us-cal-chip upcoming" title="${esc(ev.title)}">
+          <span>⏰ ${esc(ev.date_vn.slice(0, 5))} ${esc(ev.time_vn)}</span>
+          <span>${esc(ev.title.split("·")[0].trim())}</span>
+          ${ev.forecast !== "—" ? `<strong>(DB: ${esc(ev.forecast)})</strong>` : ""}
+        </span>`);
+    });
+
+    if (!chips.length) {
+      strip.classList.add("hidden");
+      return;
+    }
+    strip.classList.remove("hidden");
+    strip.innerHTML = `
+      <div class="us-cal-strip-items">${chips.join("")}</div>
+      <button type="button" class="us-cal-jump" id="btn-jump-cal">Lịch Mỹ ★★★ Live →</button>`;
+    $("#btn-jump-cal")?.addEventListener("click", () => switchTab("news"));
+  }
 
   function renderCalendar() {
     if (!state.data) return;
+    const cal = state.data.calendar || {};
+    const all = cal.events || [];
+
+    // Update top meta bar & subtitle
+    if ($("#cal-subtitle") && cal.source) {
+      $("#cal-subtitle").textContent = `${cal.source} · Tự động cập nhật mỗi 30 giây`;
+    }
+    const metaTxt = $("#cal-meta-txt");
+    if (metaTxt) {
+      const upd = cal.updated_at_vn ? cal.updated_at_vn.split("·")[0].trim() : "—";
+      metaTxt.textContent =
+        `Đồng bộ ${upd} · Tổng ${all.length} tin 3★ Mỹ (${cal.today_count ?? 0} hôm nay · ${cal.released_count ?? 0} đã có số · ${cal.upcoming_count ?? 0} sắp công bố)`;
+    }
+
+    // Keep Tab 1 highlight strip updated too
+    renderUsCalStrip(state.data);
+
     const list = $("#calendar-list");
     if (!list) return;
-    const all = state.data.calendar?.events || [];
 
     const filtered = all.filter((ev) => {
-      if (state.calFilter === "high") return ev.impact === "High" || ev.is_key_macro;
-      if (state.calFilter === "usd") return ev.country === "USD";
+      if (state.calFilter === "upcoming") return ev.upcoming;
+      if (state.calFilter === "released") return ev.has_actual || !ev.upcoming;
       return true;
     });
 
     if (!filtered.length) {
-      list.innerHTML = `<div class="empty-state">Không có sự kiện phù hợp bộ lọc trong tuần này.</div>`;
+      list.innerHTML = `<div class="empty-state">Chưa có sự kiện 3 sao Hoa Kỳ phù hợp bộ lọc này. Nhấn <strong>Cập nhật nhanh</strong> để đồng bộ ngay.</div>`;
       return;
     }
 
-    list.innerHTML = filtered
-      .map((ev) => {
-        const cls = ev.upcoming ? "upcoming" : "past";
-        const impactLabel = ev.impact === "High" ? "Cao" : ev.impact === "Medium" ? "TB" : "Thấp";
-        return `
-          <div class="cal-row ${cls}">
-            <div class="cal-time"><strong>${esc(ev.weekday_vn)} ${esc(ev.time_vn)}</strong><span>${esc(ev.date_vn.slice(0, 5))}</span></div>
-            <div class="cal-ccy">${esc(ev.country)}</div>
-            <div>
-              <div class="cal-title">${esc(ev.title)}</div>
-              <div class="cal-meta-row">
-                <span class="impact-dot ${esc(ev.impact)}"></span>
-                <span>Tác động: ${impactLabel}</span>
-                ${ev.upcoming ? `· <span style="color:var(--accent);font-weight:600">Sắp công bố</span>` : ""}
-              </div>
-            </div>
-            <div class="cal-vals">
-              <div>Dự báo: <strong>${esc(ev.forecast)}</strong></div>
-              <div>Kỳ trước: ${esc(ev.previous)}</div>
-            </div>
+    // Group chronologically with clean date separator headers
+    let htmlOut = "";
+    let lastDate = "";
+    filtered.forEach((ev) => {
+      if (ev.date_vn !== lastDate) {
+        lastDate = ev.date_vn;
+        const dayTag = ev.is_today ? "HÔM NAY · " : "";
+        htmlOut += `
+          <div class="cal-day-sep ${ev.is_today ? "is-today" : ""}">
+            <span>${dayTag}${esc(ev.weekday_vn)}, ${esc(ev.date_vn)}</span>
+            <span>Giờ Việt Nam (GMT+7)</span>
           </div>`;
-      })
-      .join("");
+      }
+
+      const rowCls = ev.just_released ? "just-released" : ev.upcoming ? "upcoming" : "past";
+      const cd = ev.upcoming && ev.ts ? formatCountdownVi(ev.ts) : "";
+      let statePill = "";
+      if (ev.just_released && ev.has_actual) {
+        statePill = `<span class="cal-state-pill live">VỪA CÔNG BỐ</span>`;
+      } else if (ev.upcoming) {
+        statePill = `<span class="cal-state-pill soon">${cd || "Sắp công bố"}</span>`;
+      } else if (ev.has_actual) {
+        statePill = `<span class="cal-state-pill done">Đã công bố</span>`;
+      } else {
+        statePill = `<span class="cal-state-pill done">Đã diễn ra</span>`;
+      }
+
+      const surpHtml = ev.surprise_label
+        ? `<span class="cal-state-pill ${ev.surprise_tone === "success" ? "live" : ev.surprise_tone === "danger" ? "" : "soon"}" style="${ev.surprise_tone === "danger" ? "color:var(--rose);background:var(--rose-soft);border-color:var(--rose-border)" : ""}">${esc(ev.surprise_label)}</span>`
+        : "";
+
+      const actualToneCls = ev.has_actual ? (ev.surprise_tone || "info") : "";
+
+      htmlOut += `
+        <div class="cal-row ${rowCls}">
+          <div class="cal-time">
+            <strong>${esc(ev.time_vn)}</strong>
+            <span class="cal-stars" title="3 sao — Tác động rất mạnh">★★★</span>
+            <span style="display:block;font-size:10px">🇺🇸 USD</span>
+          </div>
+          <div>
+            <div class="cal-title">${esc(ev.title)}</div>
+            <div class="cal-meta-row">
+              <span class="cal-cat-pill">${esc(ev.category || "Vĩ mô Mỹ")}</span>
+              ${ev.period ? `<span>Kỳ: <strong>${esc(ev.period)}</strong></span>` : ""}
+              ${statePill}
+              ${surpHtml}
+            </div>
+          </div>
+          <div class="cal-nums-grid">
+            <div class="cal-num-col actual-box ${actualToneCls}">
+              <span class="cal-num-lbl">Thực tế</span>
+              <span class="cal-num-val">${esc(ev.actual)}</span>
+            </div>
+            <div class="cal-num-col">
+              <span class="cal-num-lbl">Dự báo</span>
+              <span class="cal-num-val">${esc(ev.forecast)}</span>
+            </div>
+            <div class="cal-num-col">
+              <span class="cal-num-lbl">Kỳ trước</span>
+              <span class="cal-num-val">${esc(ev.previous)}</span>
+            </div>
+          </div>
+        </div>`;
+    });
+
+    list.innerHTML = htmlOut;
+  }
+
+  async function refreshCalendarOnly(force = true) {
+    if (calSyncBusy) return;
+    calSyncBusy = true;
+    const btn = $("#btn-cal-refresh");
+    if (btn) btn.classList.add("spinning");
+    try {
+      const r = await fetch(`/api/calendar?force=${force ? "1" : "0"}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const cal = await r.json();
+      if (cal && !cal.error && Array.isArray(cal.events)) {
+        if (!state.data) state.data = {};
+        state.data.calendar = cal;
+        renderCalendar();
+      }
+    } catch (err) {
+      console.error("Fast calendar refresh error:", err);
+    } finally {
+      calSyncBusy = false;
+      if (btn) btn.classList.remove("spinning");
+    }
   }
 
   function renderNews() {
@@ -2427,7 +2623,7 @@
       sbv: "SBV",
       worldbank: "World Bank",
       pmi_live: "ISM / S&P PMI",
-      calendar: "ForexFactory",
+      calendar: "US 3★ Live (TV+FXS)",
       news: "VN Policy RSS",
     };
     el.innerHTML = Object.entries(srcs)
@@ -2448,6 +2644,7 @@
       renderSectorPlaybook(state.data);
       renderWatchlist();
       renderBriefing(state.data);
+      renderUsCalStrip(state.data);
       renderKpis(state.data);
     }
     if (isAll || tab === "macro") {
@@ -2546,9 +2743,29 @@
       if (map[e.key]) switchTab(map[e.key]);
     });
 
-    // Theme & Manual Refresh
-    $("#btn-theme")?.addEventListener("click", () => applyTheme(state.theme === "dark" ? "light" : "dark"));
+    // Explicit Dark / Light Theme Switcher
+    $("#theme-switch")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".theme-opt[data-set-theme]");
+      if (!btn) return;
+      applyTheme(btn.dataset.setTheme);
+    });
+
+    // Collapsible Left Sidebar & Mobile Slide-out Drawer
+    $("#btn-sidebar-toggle")?.addEventListener("click", () => {
+      if (window.innerWidth <= 1080) {
+        closeMobileDrawer();
+      } else {
+        applySidebarState(!state.sidebarCollapsed);
+      }
+    });
+    $("#btn-mobile-menu")?.addEventListener("click", () => {
+      $("#app-shell")?.classList.toggle("mobile-open");
+    });
+    $("#sidebar-backdrop")?.addEventListener("click", closeMobileDrawer);
+
+    // Manual Full Refresh & Instant US 3-Star Calendar Refresh
     $("#btn-refresh")?.addEventListener("click", () => fetchDashboard("live", true));
+    $("#btn-cal-refresh")?.addEventListener("click", () => refreshCalendarOnly(true));
 
     // KPI Cards quick jump to deep-dive workspace tab
     $$(".kpi-card[data-jump-tab]").forEach((card) => {
@@ -2664,9 +2881,17 @@
 
   document.addEventListener("DOMContentLoaded", async () => {
     applyTheme(state.theme);
+    applySidebarState(state.sidebarCollapsed);
     initEvents();
     loadWatchlist();
     await fetchDashboard("fast", false);
     await fetchDashboard("live", false);
+
+    // Auto-poll live US 3-star economic calendar every 30s when page is visible
+    calPollTimer = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        refreshCalendarOnly(false);
+      }
+    }, 30000);
   });
 })();
