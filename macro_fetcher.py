@@ -61,7 +61,7 @@ SOURCE_TTL = {
     "sbv": 600,           # Optional SBV portal (short timeout, skipped cleanly if unavailable)
     "worldbank": 3600,    # Annual VN vs US comparison
     "pmi_live": 900,      # PMI & VN CPI baseline + live RSS/S&P Global updates
-    "calendar": 360,      # ForexFactory JSON (rate limit 2 req / 5 min)
+    "calendar": 30,       # Live US 3-Star Economic Calendar (TradingView + FXStreet real-time)
     "news": 300,          # Vietnam macro & SBV policy RSS feeds
 }
 
@@ -1932,55 +1932,462 @@ def fetch_pmi_and_vn_macro() -> dict[str, Any]:
 
 
 # =============================================================================
-# 11. Live Economic Calendar & Vietnam Policy / SBV News Aggregator
+# 11. Live US 3-Star High-Impact Economic Calendar & Vietnam Policy News
 # =============================================================================
 
 MACRO_KEYWORDS = (
-    "cpi", "pce", "pmi", "fomc", "fed", "unemployment", "payroll", "non-farm",
+    "cpi", "pce", "pmi", "fomc", "fed", "unemployment", "payroll", "non-farm", "nonfarm",
     "nfp", "gdp", "ppi", "interest rate", "rate statement", "jobless", "retail sales",
-    "powell", "inflation", "jolts", "ism",
+    "powell", "inflation", "jolts", "ism", "adp", "durable goods", "personal spending",
+    "personal income", "consumer sentiment", "hourly earnings",
 )
 
+# Drop noisy FOMC dot-plot sub-rows from FXStreet while keeping core FOMC decision/statement/conference
+_CAL_EXCLUDE_PATTERNS = (
+    "interest rate projections - 1st",
+    "interest rate projections - 2nd",
+    "interest rate projections - 3rd",
+    "interest rate projections - current",
+    "interest rate projections - longer",
+)
 
-def fetch_economic_calendar() -> dict[str, Any]:
-    r = requests.get("https://nfs.faireconomy.media/ff_calendar_thisweek.json", headers=HEADERS, timeout=10)
+# Canonical normalization to deduplicate & merge TradingView + FXStreet seamlessly
+def _canonical_us_event(title: str) -> tuple[str, str, str, str]:
+    """
+    Returns (canonical_key, display_title, category_vi, polarity)
+    polarity: 'higher_hot' (inflation), 'lower_good' (unemployment), 'higher_good' (growth/jobs/PMI), 'neutral'
+    """
+    t = re.sub(r"\s+", " ", (title or "").strip())
+    tl = t.lower()
+
+    if "core" in tl and ("pce" in tl or "personal consumption expenditures" in tl):
+        if "yoy" in tl or "y/y" in tl:
+            return "core_pce_yoy", "Core PCE Mỹ (YoY) · Lạm phát Lõi Fed", "Lạm phát", "higher_hot"
+        return "core_pce_mom", "Core PCE Mỹ (MoM) · Lạm phát Lõi Fed", "Lạm phát", "higher_hot"
+    if ("pce" in tl or "personal consumption expenditures" in tl) and "price" in tl:
+        if "yoy" in tl or "y/y" in tl:
+            return "pce_yoy", "PCE Mỹ (YoY)", "Lạm phát", "higher_hot"
+        return "pce_mom", "PCE Mỹ (MoM)", "Lạm phát", "higher_hot"
+
+    if ("core inflation" in tl) or ("consumer price index ex food" in tl) or ("core cpi" in tl):
+        if "yoy" in tl or "y/y" in tl:
+            return "core_cpi_yoy", "Core CPI Mỹ (YoY) · Lạm phát Lõi", "Lạm phát", "higher_hot"
+        return "core_cpi_mom", "Core CPI Mỹ (MoM) · Lạm phát Lõi", "Lạm phát", "higher_hot"
+    if ("inflation rate" in tl) or ("consumer price index" in tl) or (re.search(r"\bcpi\b", tl)):
+        if "yoy" in tl or "y/y" in tl:
+            return "cpi_yoy", "CPI Mỹ (YoY) · Lạm phát Toàn phần", "Lạm phát", "higher_hot"
+        return "cpi_mom", "CPI Mỹ (MoM) · Lạm phát Toàn phần", "Lạm phát", "higher_hot"
+
+    if ("producer price" in tl or re.search(r"\bppi\b", tl)):
+        is_core = "core" in tl or "ex food" in tl
+        is_yoy = "yoy" in tl or "y/y" in tl
+        if is_core and is_yoy:
+            return "core_ppi_yoy", "Core PPI Mỹ (YoY) · Giá Sản xuất Lõi", "Lạm phát", "higher_hot"
+        if is_core:
+            return "core_ppi_mom", "Core PPI Mỹ (MoM) · Giá Sản xuất Lõi", "Lạm phát", "higher_hot"
+        if is_yoy:
+            return "ppi_yoy", "PPI Mỹ (YoY) · Giá Sản xuất", "Lạm phát", "higher_hot"
+        return "ppi_mom", "PPI Mỹ (MoM) · Giá Sản xuất", "Lạm phát", "higher_hot"
+
+    if "non farm payroll" in tl or "nonfarm payroll" in tl or "non-farm" in tl:
+        return "nfp", "Bảng lương Phi nông nghiệp Mỹ (NFP)", "Việc làm", "higher_good"
+    if "adp" in tl and "employment" in tl:
+        return "adp", "Việc làm Khu vực Tư nhân Mỹ (ADP)", "Việc làm", "higher_good"
+    if "unemployment rate" in tl:
+        return "unemp", "Tỉ lệ Thất nghiệp Mỹ (UNRATE)", "Việc làm", "lower_good"
+    if "jolts" in tl or "job openings" in tl:
+        return "jolts", "Việc làm Đang tuyển dụng Mỹ (JOLTs)", "Việc làm", "higher_good"
+    if "initial jobless" in tl or "unemployment claims" in tl:
+        return "jobless_claims", "Đơn xin Trợ cấp Thất nghiệp Tuần (Mỹ)", "Việc làm", "lower_good"
+    if "average hourly earnings" in tl:
+        if "yoy" in tl or "y/y" in tl:
+            return "ahe_yoy", "Thu nhập Bình quân Theo giờ (YoY)", "Lạm phát", "higher_hot"
+        return "ahe_mom", "Thu nhập Bình quân Theo giờ (MoM)", "Lạm phát", "higher_hot"
+
+    if "ism manufacturing" in tl:
+        return "ism_mfg", "PMI Sản xuất Mỹ (ISM Manufacturing)", "PMI", "higher_good"
+    if "ism services" in tl or "ism non-manufacturing" in tl:
+        return "ism_svc", "PMI Dịch vụ Mỹ (ISM Services)", "PMI", "higher_good"
+    if "s&p global manufacturing pmi" in tl or "flash manufacturing pmi" in tl:
+        return "sp_mfg_pmi", "PMI Sản xuất Mỹ (S&P Global)", "PMI", "higher_good"
+    if "s&p global services pmi" in tl or "flash services pmi" in tl:
+        return "sp_svc_pmi", "PMI Dịch vụ Mỹ (S&P Global)", "PMI", "higher_good"
+
+    if "gdp" in tl:
+        return "gdp", f"Tăng trưởng GDP Mỹ ({t})", "Tăng trưởng", "higher_good"
+    if tl in ("interest rate", "fed interest rate decision", "federal funds rate") or "interest rate decision" in tl:
+        return "fomc_rate", "Quyết định Lãi suất Fed (FOMC)", "Fed / FOMC", "neutral"
+    if "fomc press conference" in tl:
+        return "fomc_press", "Họp báo Chủ tịch Fed (FOMC)", "Fed / FOMC", "neutral"
+    if "monetary policy statement" in tl or "fomc statement" in tl:
+        return "fomc_stmt", "Tuyên bố Chính sách Tiền tệ Fed", "Fed / FOMC", "neutral"
+    if "fomc economic projections" in tl:
+        return "fomc_proj", "Dự báo Kinh tế & Dot-Plot FOMC", "Fed / FOMC", "neutral"
+    if "fomc minutes" in tl:
+        return "fomc_min", "Biên bản Họp FOMC (Fed Minutes)", "Fed / FOMC", "neutral"
+    if "powell" in tl:
+        return "powell", f"Phát biểu Chủ tịch Fed ({t})", "Fed / FOMC", "neutral"
+
+    if "retail sales control" in tl:
+        return "retail_ctrl", "Doanh số Bán lẻ Nhóm Kiểm soát Mỹ", "Tiêu dùng", "higher_good"
+    if "core retail sales" in tl:
+        return "core_retail", "Doanh số Bán lẻ Lõi Mỹ (MoM)", "Tiêu dùng", "higher_good"
+    if "retail sales" in tl:
+        return "retail_mom", "Doanh số Bán lẻ Mỹ (MoM)", "Tiêu dùng", "higher_good"
+    if "personal spending" in tl:
+        return "personal_spending", "Chi tiêu Cá nhân Mỹ (MoM)", "Tiêu dùng", "higher_good"
+    if "personal income" in tl:
+        return "personal_income", "Thu nhập Cá nhân Mỹ (MoM)", "Tiêu dùng", "higher_good"
+    if "durable goods" in tl:
+        return "durable_goods", "Đơn đặt hàng Lâu bền Mỹ (MoM)", "Sản xuất", "higher_good"
+    if "michigan consumer sentiment" in tl:
+        return "umich", "Tâm lý Người tiêu dùng Mỹ (Michigan)", "Tiêu dùng", "higher_good"
+    if "cb consumer confidence" in tl:
+        return "cb_conf", "Niềm tin Người tiêu dùng Mỹ (CB)", "Tiêu dùng", "higher_good"
+    if "existing home sales" in tl:
+        return "home_sales", "Doanh số Bán nhà Hiện hữu Mỹ", "BĐS Mỹ", "higher_good"
+
+    norm_key = re.sub(r"[^a-z0-9]+", "_", tl).strip("_")[:36]
+    return norm_key, t, "Vĩ mô Mỹ", "neutral"
+
+
+def _fmt_cal_val(val: Any, unit: str | None = None, scale: str | None = None) -> str:
+    if val is None or val == "":
+        return "—"
+    if isinstance(val, str):
+        s = val.strip()
+        return s if s else "—"
+    try:
+        num = float(val)
+    except Exception:
+        return str(val)
+    u = (unit or "").strip()
+    sc = (scale or "").strip().upper()
+    if sc == "ZERO":
+        sc = ""
+    if abs(num - round(num)) < 1e-6 and sc in ("K", "M", "B") and abs(num) >= 10:
+        num_str = f"{int(round(num)):,}"
+    elif abs(num) >= 100 and u != "%":
+        num_str = f"{num:,.1f}".rstrip("0").rstrip(".")
+    else:
+        num_str = f"{num:.2f}".rstrip("0").rstrip(".")
+        if "." not in num_str and u == "%":
+            num_str = f"{num:.1f}"
+    suffix = f"{sc}{u}" if sc else u
+    return f"{num_str}{suffix}"
+
+
+def _fetch_tv_us_3star(frm_iso: str, to_iso: str) -> list[dict[str, Any]]:
+    r = requests.get(
+        "https://economic-calendar.tradingview.com/events",
+        params={"from": frm_iso, "to": to_iso, "countries": "US"},
+        headers={
+            **HEADERS,
+            "Origin": "https://www.tradingview.com",
+            "Referer": "https://www.tradingview.com/",
+        },
+        timeout=6,
+    )
     r.raise_for_status()
-    raw = r.json()
-    if not isinstance(raw, list):
-        raise RuntimeError("Invalid calendar response")
-
-    now_vn = _now_vn()
-    events = []
-    for item in raw:
-        impact = (item.get("impact") or "").strip()
-        country = (item.get("country") or "").strip().upper()
+    rows = r.json().get("result") or []
+    out = []
+    for item in rows:
+        if item.get("importance") != 1:
+            continue
+        if (item.get("country") or "").upper() != "US":
+            continue
         title = (item.get("title") or "").strip()
         date_raw = item.get("date") or ""
         if not title or not date_raw:
             continue
-        if country != "USD" and impact not in ("High", "Medium"):
-            continue
         try:
-            dt_vn = datetime.fromisoformat(date_raw).astimezone(VN_TZ)
+            dt_utc = datetime.fromisoformat(date_raw.replace("Z", "+00:00")).astimezone(timezone.utc)
         except Exception:
             continue
+        unit = item.get("unit") or ""
+        scale = item.get("scale") or ""
+        out.append({
+            "src": "TradingView",
+            "dt_utc": dt_utc,
+            "raw_title": title,
+            "period": (item.get("period") or "").strip(),
+            "actual_num": _safe_float(item.get("actual")),
+            "forecast_num": _safe_float(item.get("forecast")),
+            "previous_num": _safe_float(item.get("previous")),
+            "actual": _fmt_cal_val(item.get("actual"), unit, scale),
+            "forecast": _fmt_cal_val(item.get("forecast"), unit, scale),
+            "previous": _fmt_cal_val(item.get("previous"), unit, scale),
+            "unit": unit,
+            "scale": scale,
+            "official_source": (item.get("source") or "").strip(),
+        })
+    return out
 
-        events.append({
-            "title": title,
-            "country": country,
-            "impact": impact,
-            "date_vn": dt_vn.strftime("%d/%m/%Y"),
-            "weekday_vn": ["T2", "T3", "T4", "T5", "T6", "T7", "CN"][dt_vn.weekday()],
-            "time_vn": dt_vn.strftime("%H:%M"),
-            "iso": dt_vn.isoformat(),
-            "upcoming": dt_vn >= now_vn,
+
+def _fetch_fxstreet_us_3star(frm_iso: str, to_iso: str) -> list[dict[str, Any]]:
+    url = f"https://calendar-api.fxstreet.com/en/api/v1/eventDates/{frm_iso}/{to_iso}"
+    r = requests.get(
+        url,
+        params={"volatilities": "HIGH", "countries": "US"},
+        headers={
+            **HEADERS,
+            "Origin": "https://www.fxstreet.com",
+            "Referer": "https://www.fxstreet.com/",
+        },
+        timeout=6,
+    )
+    r.raise_for_status()
+    rows = r.json()
+    if not isinstance(rows, list):
+        return []
+    out = []
+    for item in rows:
+        if (item.get("countryCode") or "").upper() != "US":
+            continue
+        if (item.get("volatility") or "").upper() != "HIGH":
+            continue
+        title = (item.get("name") or "").strip()
+        if not title or any(p in title.lower() for p in _CAL_EXCLUDE_PATTERNS):
+            continue
+        date_raw = item.get("dateUtc") or ""
+        if not date_raw:
+            continue
+        try:
+            dt_utc = datetime.fromisoformat(date_raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+        except Exception:
+            continue
+        unit = item.get("unit") or ""
+        pot = item.get("potency") or ""
+        scale = "" if pot.upper() in ("ZERO", "NONE", "") else pot.upper()
+        out.append({
+            "src": "FXStreet",
+            "dt_utc": dt_utc,
+            "raw_title": title,
+            "period": "",
+            "actual_num": _safe_float(item.get("actual")),
+            "forecast_num": _safe_float(item.get("consensus")),
+            "previous_num": _safe_float(item.get("previous")),
+            "actual": _fmt_cal_val(item.get("actual"), unit, scale),
+            "forecast": _fmt_cal_val(item.get("consensus"), unit, scale),
+            "previous": _fmt_cal_val(item.get("previous"), unit, scale),
+            "unit": unit,
+            "scale": scale,
+            "official_source": "",
+        })
+    return out
+
+
+def _fetch_forexfactory_us_3star_fallback() -> list[dict[str, Any]]:
+    r = requests.get("https://nfs.faireconomy.media/ff_calendar_thisweek.json", headers=HEADERS, timeout=6)
+    r.raise_for_status()
+    raw = r.json()
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for item in raw:
+        if (item.get("country") or "").strip().upper() != "USD":
+            continue
+        if (item.get("impact") or "").strip().lower() != "high":
+            continue
+        title = (item.get("title") or "").strip()
+        date_raw = item.get("date") or ""
+        if not title or not date_raw:
+            continue
+        try:
+            dt_utc = datetime.fromisoformat(date_raw).astimezone(timezone.utc)
+        except Exception:
+            continue
+        out.append({
+            "src": "ForexFactory",
+            "dt_utc": dt_utc,
+            "raw_title": title,
+            "period": "",
+            "actual_num": None,
+            "forecast_num": None,
+            "previous_num": None,
+            "actual": "—",
             "forecast": (item.get("forecast") or "—").strip() or "—",
             "previous": (item.get("previous") or "—").strip() or "—",
-            "is_key_macro": any(kw in title.lower() for kw in MACRO_KEYWORDS),
+            "unit": "",
+            "scale": "",
+            "official_source": "",
         })
+    return out
 
-    events.sort(key=lambda x: x["iso"])
-    return {"source": "ForexFactory Economic Calendar (Giờ Việt Nam GMT+7)", "events": events}
+
+def fetch_economic_calendar() -> dict[str, Any]:
+    """
+    Real-time US 3-Star (High Impact) ONLY Economic Calendar.
+    Queries TradingView + FXStreet in parallel for sub-minute Actual value updates
+    (with ForexFactory fallback), deduplicates & merges best Actual/Forecast/Previous,
+    and converts all timestamps to Vietnam Time (GMT+7).
+    """
+    now_utc = datetime.now(timezone.utc)
+    now_vn = now_utc.astimezone(VN_TZ)
+    frm_iso = (now_utc - timedelta(days=4)).strftime("%Y-%m-%dT00:00:00.000Z")
+    to_iso = (now_utc + timedelta(days=18)).strftime("%Y-%m-%dT23:59:59.000Z")
+
+    tv_rows: list[dict[str, Any]] = []
+    fxs_rows: list[dict[str, Any]] = []
+    active_sources: list[str] = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+        fut_tv = ex.submit(_fetch_tv_us_3star, frm_iso, to_iso)
+        fut_fxs = ex.submit(_fetch_fxstreet_us_3star, frm_iso, to_iso)
+        try:
+            tv_rows = fut_tv.result()
+            if tv_rows:
+                active_sources.append("TradingView")
+        except Exception:
+            pass
+        try:
+            fxs_rows = fut_fxs.result()
+            if fxs_rows:
+                active_sources.append("FXStreet")
+        except Exception:
+            pass
+
+    all_raw = tv_rows + fxs_rows
+    if not all_raw:
+        try:
+            all_raw = _fetch_forexfactory_us_3star_fallback()
+            if all_raw:
+                active_sources.append("ForexFactory")
+        except Exception:
+            pass
+
+    if not all_raw:
+        raise RuntimeError("No US 3-star calendar feeds responded")
+
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in all_raw:
+        dt_utc: datetime = row["dt_utc"]
+        ckey, disp_title, cat_vi, polarity = _canonical_us_event(row["raw_title"])
+        # Bucket key: UTC date+hour+minute + canonical event key
+        bkey = (dt_utc.strftime("%Y-%m-%dT%H:%M"), ckey)
+
+        if bkey not in merged:
+            dt_vn = dt_utc.astimezone(VN_TZ)
+            merged[bkey] = {
+                "key": ckey,
+                "title": disp_title,
+                "raw_title": row["raw_title"],
+                "category": cat_vi,
+                "polarity": polarity,
+                "country": "USD",
+                "stars": 3,
+                "impact": "High",
+                "period": row["period"],
+                "official_source": row["official_source"],
+                "date_vn": dt_vn.strftime("%d/%m/%Y"),
+                "date_ymd": dt_vn.strftime("%Y-%m-%d"),
+                "weekday_vn": ["T2", "T3", "T4", "T5", "T6", "T7", "CN"][dt_vn.weekday()],
+                "time_vn": dt_vn.strftime("%H:%M"),
+                "iso": dt_vn.isoformat(),
+                "ts": dt_utc.timestamp(),
+                "actual": row["actual"],
+                "forecast": row["forecast"],
+                "previous": row["previous"],
+                "actual_num": row["actual_num"],
+                "forecast_num": row["forecast_num"],
+                "previous_num": row["previous_num"],
+                "sources": [row["src"]],
+                "is_key_macro": True,
+            }
+        else:
+            ev = merged[bkey]
+            if row["src"] not in ev["sources"]:
+                ev["sources"].append(row["src"])
+            # Fill missing Actual / Forecast / Previous from the complementary real-time feed
+            if ev["actual"] == "—" and row["actual"] != "—":
+                ev["actual"] = row["actual"]
+                ev["actual_num"] = row["actual_num"]
+            if ev["forecast"] == "—" and row["forecast"] != "—":
+                ev["forecast"] = row["forecast"]
+                ev["forecast_num"] = row["forecast_num"]
+            if ev["previous"] == "—" and row["previous"] != "—":
+                ev["previous"] = row["previous"]
+                ev["previous_num"] = row["previous_num"]
+            if not ev["period"] and row["period"]:
+                ev["period"] = row["period"]
+            if not ev["official_source"] and row["official_source"]:
+                ev["official_source"] = row["official_source"]
+
+    today_ymd = now_vn.strftime("%Y-%m-%d")
+    now_ts = now_utc.timestamp()
+    events: list[dict[str, Any]] = []
+
+    for ev in merged.values():
+        diff_sec = ev["ts"] - now_ts
+        has_actual = ev["actual"] != "—"
+        is_today = ev["date_ymd"] == today_ymd
+        upcoming = diff_sec > 0 and not has_actual
+        just_released = (not upcoming) and (diff_sec >= -21600)  # Within last 6 hours
+
+        # Determine surprise direction & market tone vs forecast
+        surprise = "none"       # beat | miss | inline | none
+        surprise_tone = "neutral"  # success | danger | neutral
+        surprise_label = ""
+        an, fn = ev["actual_num"], ev["forecast_num"]
+        if an is not None and fn is not None:
+            diff_v = an - fn
+            if abs(diff_v) < 1e-6:
+                surprise = "inline"
+                surprise_tone = "info"
+                surprise_label = "Đúng dự báo"
+            elif diff_v > 0:
+                surprise = "above"
+                surprise_label = "Cao hơn dự báo"
+                if ev["polarity"] == "higher_hot" or ev["polarity"] == "lower_good":
+                    surprise_tone = "danger"
+                elif ev["polarity"] == "higher_good":
+                    surprise_tone = "success"
+                else:
+                    surprise_tone = "warning"
+            else:
+                surprise = "below"
+                surprise_label = "Thấp hơn dự báo"
+                if ev["polarity"] == "higher_hot" or ev["polarity"] == "lower_good":
+                    surprise_tone = "success"
+                elif ev["polarity"] == "higher_good":
+                    surprise_tone = "danger"
+                else:
+                    surprise_tone = "warning"
+
+        ev["upcoming"] = upcoming
+        ev["is_today"] = is_today
+        ev["just_released"] = just_released
+        ev["has_actual"] = has_actual
+        ev["surprise"] = surprise
+        ev["surprise_tone"] = surprise_tone
+        ev["surprise_label"] = surprise_label
+        # Clean internal numeric helper fields not needed by UI
+        ev.pop("actual_num", None)
+        ev.pop("forecast_num", None)
+        ev.pop("previous_num", None)
+        events.append(ev)
+
+    events.sort(key=lambda x: x["ts"])
+
+    today_count = sum(1 for e in events if e["is_today"])
+    upcoming_count = sum(1 for e in events if e["upcoming"])
+    released_count = sum(1 for e in events if e["has_actual"])
+
+    return {
+        "source": f"{' + '.join(active_sources)} Live (Chỉ Mỹ ★★★ · GMT+7)",
+        "updated_at_vn": now_vn.strftime("%H:%M:%S · %d/%m/%Y"),
+        "updated_ts": now_ts,
+        "today_count": today_count,
+        "upcoming_count": upcoming_count,
+        "released_count": released_count,
+        "events": events,
+    }
+
+
+def fetch_calendar_fast(force: bool = True) -> dict[str, Any]:
+    """Dedicated ultra-fast US 3-star calendar fetch (15s micro-cache unless forced)."""
+    data, _ = _get_cached_or_fetch("calendar", fetch_economic_calendar, force=force, respect_strict_cooldown=False)
+    return data or {"source": "Live US 3-Star", "updated_at_vn": _now_vn().strftime("%H:%M:%S · %d/%m/%Y"), "events": []}
 
 
 NEWS_FEEDS = [
@@ -2603,7 +3010,7 @@ def build_dashboard(force: bool = False) -> dict[str, Any]:
         f_sbv = ex.submit(run_src, "sbv", fetch_sbv_optional)
         f_wb = ex.submit(run_src, "worldbank", fetch_worldbank_comparison)
         f_pmi = ex.submit(run_src, "pmi_live", fetch_pmi_and_vn_macro)
-        f_cal = ex.submit(run_src, "calendar", fetch_economic_calendar, True)
+        f_cal = ex.submit(run_src, "calendar", fetch_economic_calendar, False)
         f_news = ex.submit(run_src, "news", fetch_vietnam_policy_news)
 
         bls = f_bls.result() or {}

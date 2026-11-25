@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from macro_fetcher import build_dashboard, fetch_watchlist_stocks, get_cached_dashboard
+from macro_fetcher import build_dashboard, fetch_calendar_fast, fetch_watchlist_stocks, get_cached_dashboard
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -96,6 +96,18 @@ class MacroHandler(BaseHTTPRequestHandler):
 
         if path == "/api/health":
             self._send_json({"status": "ok", "ts": time.time()})
+            return
+
+        if path == "/api/calendar":
+            force = qs.get("force", ["1"])[0] in ("1", "true", "yes")
+            try:
+                cal = fetch_calendar_fast(force=force)
+                # Keep in-memory dashboard payload in sync with latest calendar!
+                if _latest_payload is not None and isinstance(cal, dict):
+                    _latest_payload["calendar"] = cal
+                self._send_json(cal)
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
             return
 
         if path == "/api/watchlist":
