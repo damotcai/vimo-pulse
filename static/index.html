@@ -7,10 +7,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=5" />
+  <link rel="stylesheet" href="/static/styles.css?v=6" />
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js" defer></script>
-  <script src="/static/bctc_module.js?v=5" defer></script>
-  <script src="/static/app.js?v=5" defer></script>
+  <script src="/static/bctc_module.js?v=6" defer></script>
+  <script src="/static/wyckoff_module.js?v=6" defer></script>
+  <script src="/static/app.js?v=6" defer></script>
 </head>
 <body>
   <div class="app-shell" id="app-shell">
@@ -64,6 +65,16 @@
           </span>
           <span class="ws-label">BCTC × Vĩ mô Pro</span>
           <span class="ws-key">6</span>
+        </button>
+
+        <button class="ws-tab" data-tab="wyckoff" data-tooltip="Kỹ thuật Wyckoff × Vĩ mô (Phím 7)" role="tab" aria-selected="false">
+          <span class="ws-ico" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
+            </svg>
+          </span>
+          <span class="ws-label">Wyckoff × Vĩ mô</span>
+          <span class="ws-key">7</span>
         </button>
 
         <button class="ws-tab" data-tab="macro" data-tooltip="Lạm phát · PMI · Lao động (Phím 2)" role="tab" aria-selected="false">
@@ -1428,12 +1439,183 @@
             </div>
           </section>
         </div>
+
+        <!-- =====================================================================
+             WORKSPACE 7: PHƯƠNG PHÁP KỸ THUẬT WYCKOFF (VSA) × VĨ MÔ HIỆN TẠI
+             ===================================================================== -->
+        <div class="ws-pane" data-pane="wyckoff">
+          <section class="section">
+            <div class="section-head">
+              <div>
+                <span class="eyebrow">CHU KỲ DÒNG TIỀN TẠO LẬP · WYCKOFF VSA × VĨ MÔ</span>
+                <h2 class="section-title">Phân tích Kỹ thuật Wyckoff Kết hợp Vĩ mô Hiện tại</h2>
+                <p class="section-desc">Định lượng 4 Pha Wyckoff (Tích lũy · Đẩy giá · Phân phối · Đè giá), 3 Quy luật Vàng (Cung-Cầu · Nguyên nhân-Kết quả · Nỗ lực-Kết quả VSA) &amp; lọc bẫy Bull Trap bằng La bàn Vĩ mô sống</p>
+              </div>
+              <div class="controls-row">
+                <div class="segmented" id="wy-bars-group">
+                  <button class="seg-btn" data-bars="65">65 phiên</button>
+                  <button class="seg-btn active" data-bars="120">120 phiên</button>
+                  <button class="seg-btn" data-bars="180">180 phiên</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Symbol Switcher & Macro Strip -->
+            <div class="bctc-top-bar">
+              <div class="bctc-macro-pills" id="wy-quick-chips">
+                <button type="button" class="pill-btn active" data-wy-sym="VNINDEX">VN-Index</button>
+                <button type="button" class="pill-btn" data-wy-sym="VN30">VN30</button>
+                <button type="button" class="pill-btn" data-wy-sym="HNX">HNX</button>
+                <button type="button" class="pill-btn" data-wy-sym="UPCOM">UPCoM</button>
+                <span class="wy-chip-sep">|</span>
+                <span id="wy-stock-chips" class="pill-tabs"></span>
+              </div>
+              <div class="bctc-scrape-controls">
+                <input type="text" id="wy-symbol-input" class="wl-input mono" placeholder="Soi Wyckoff mã bất kỳ (vd: MBB, STB, GAS)..." maxlength="10" aria-label="Nhập mã cổ phiếu phân tích Wyckoff" />
+                <button type="button" id="btn-wy-analyze" class="btn-primary">Soi Wyckoff</button>
+              </div>
+            </div>
+            <div class="bctc-status-msg hidden" id="wy-status-msg"></div>
+
+            <!-- Wyckoff 4-Stage Cycle Progress + Macro Confluence Hero -->
+            <div class="panel wy-hero-panel">
+              <div class="wy-hero-top">
+                <div>
+                  <div class="bctc-hero-badges">
+                    <h2 class="bctc-hero-sym mono" id="wy-sym-title">VNINDEX</h2>
+                    <span class="badge-soft" id="wy-stage-pill">Đang quét chu kỳ...</span>
+                    <span class="source-tag" id="wy-subphase-pill">—</span>
+                  </div>
+                  <div class="bctc-hero-name" id="wy-sym-name">Chỉ số VN-Index</div>
+                </div>
+                <div class="bctc-hero-right">
+                  <div class="bctc-hero-metric">
+                    <div class="mini-label">Giá đóng cửa (<span id="wy-date">—</span>)</div>
+                    <div class="bctc-hero-price mono" id="wy-price">—</div>
+                    <div class="mini-label mono" id="wy-pct1d">—</div>
+                  </div>
+                  <div class="bctc-score-badge">
+                    <div class="bctc-score-big mono" id="wy-conf-score">—</div>
+                    <div class="bctc-score-sub mono" id="wy-score-split">Wyckoff — · Vĩ mô —</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 4-Stage Visual Cycle Bar -->
+              <div class="wy-cycle-bar" id="wy-cycle-bar">
+                <div class="wy-stage-step" data-stage="ACCUMULATION">
+                  <span class="wy-step-num">PHA 1</span>
+                  <strong>Tích lũy (Accumulation)</strong>
+                  <small>PS · SC · AR · ST · Spring · SOS</small>
+                </div>
+                <div class="wy-stage-step" data-stage="MARKUP">
+                  <span class="wy-step-num">PHA 2</span>
+                  <strong>Đẩy giá (Markup)</strong>
+                  <small>Uptrend · LPS · Tái tích lũy</small>
+                </div>
+                <div class="wy-stage-step" data-stage="DISTRIBUTION">
+                  <span class="wy-step-num">PHA 3</span>
+                  <strong>Phân phối (Distribution)</strong>
+                  <small>PSY · BC · UT / UTAD · SOW</small>
+                </div>
+                <div class="wy-stage-step" data-stage="MARKDOWN">
+                  <span class="wy-step-num">PHA 4</span>
+                  <strong>Đè giá (Markdown)</strong>
+                  <small>Downtrend · LPSY · Tái phân phối</small>
+                </div>
+              </div>
+
+              <!-- Confluence Action Callout -->
+              <div class="bctc-summary-callout mt-sm" id="wy-fusion-callout">Đang hợp nhất tín hiệu Wyckoff × Vĩ mô...</div>
+            </div>
+
+            <!-- Main Annotated Wyckoff Candlestick + Trading Range + VSA Volume + OBV/RS Chart -->
+            <div class="panel mt-sm">
+              <div class="panel-head compact">
+                <div>
+                  <h3 class="panel-title" id="wy-chart-title">Đồ thị Wyckoff &amp; VSA: Nến Nhật · Hộp Trading Range (Ice/Creek) · Sự kiện · Volume · OBV</h3>
+                  <p class="panel-sub">Ghim xanh = Cầu tổ chức (SC, ST, SPRING, SOS, LPS, ABS) · Ghim đỏ = Cung phân phối (BC, UTAD, SOW, ND) · Vùng tô mờ = Hộp Trading Range</p>
+                </div>
+                <div class="wy-legend-mini mono" id="wy-tr-badge">Ice: — · Creek: —</div>
+              </div>
+              <div class="chart-box wy-chart-tall" id="chart-wyckoff-main"></div>
+            </div>
+
+            <!-- 3 Wyckoff Laws + Macro Filter Grid -->
+            <div class="wy-laws-grid mt-sm">
+              <!-- Law 1: Supply & Demand -->
+              <div class="panel">
+                <div class="panel-head compact">
+                  <div>
+                    <h3 class="panel-title">Quy luật 1 · Cung &amp; Cầu (Supply – Demand)</h3>
+                    <p class="panel-sub">Áp lực khối lượng tăng/giảm, OBV &amp; RS vs VN-Index</p>
+                  </div>
+                </div>
+                <div class="wy-law-rows" id="wy-law1-body"></div>
+              </div>
+
+              <!-- Law 2: Cause & Effect -->
+              <div class="panel">
+                <div class="panel-head compact">
+                  <div>
+                    <h3 class="panel-title">Quy luật 2 · Nguyên nhân &amp; Kết quả</h3>
+                    <p class="panel-sub">Độ rộng nền Trading Range &amp; Mục tiêu đo lường</p>
+                  </div>
+                </div>
+                <div class="wy-law-rows" id="wy-law2-body"></div>
+              </div>
+
+              <!-- Law 3 & Macro Filter: Triggers & VSA Log -->
+              <div class="panel">
+                <div class="panel-head compact">
+                  <div>
+                    <h3 class="panel-title">Quy luật 3 · Nỗ lực – Kết quả &amp; Lọc Vĩ mô</h3>
+                    <p class="panel-sub">Ngưỡng kích hoạt kỷ luật &amp; nhật ký nến VSA gần nhất</p>
+                  </div>
+                </div>
+                <div class="wy-trigger-box" id="wy-trigger-box"></div>
+                <div class="wy-events-log" id="wy-events-log"></div>
+              </div>
+            </div>
+
+            <!-- Multi-Market & Stock Wyckoff × Macro Scanner Radar -->
+            <div class="panel mt-sm">
+              <div class="panel-head compact">
+                <div>
+                  <h3 class="panel-title">Radar Quét Chu kỳ Wyckoff × Vĩ mô (4 Chỉ số &amp; Toàn rổ Cổ phiếu)</h3>
+                  <p class="panel-sub">Nhấp vào bất kỳ dòng nào để bật đồ thị Wyckoff VSA chi tiết của chỉ số / cổ phiếu đó</p>
+                </div>
+                <span class="source-tag" id="wy-radar-macro-tag">La bàn Vĩ mô: —</span>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table mono-nums bctc-matrix-table" id="table-wyckoff-radar">
+                  <thead>
+                    <tr>
+                      <th>Mã</th>
+                      <th>Giá</th>
+                      <th>Chu kỳ Wyckoff</th>
+                      <th>Pha chi tiết (Phase)</th>
+                      <th>Vị trí TR</th>
+                      <th>Up/Dn Vol</th>
+                      <th>RS 20p vs VNI</th>
+                      <th>Tín hiệu VSA mới</th>
+                      <th>Wyckoff</th>
+                      <th>Hợp lưu (×VM)</th>
+                      <th>Hành động Wyckoff × Vĩ mô</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        </div>
       </main>
 
       <footer class="footer">
         <div class="footer-inner">
           <div>
-            <strong>VĨ MÔ PULSE</strong> · Phím tắt: <code class="mono">1</code>–<code class="mono">6</code> · <code class="mono">0</code> Toàn cảnh · Giờ Việt Nam (UTC+7)
+            <strong>VĨ MÔ PULSE</strong> · Phím tắt: <code class="mono">1</code>–<code class="mono">7</code> · <code class="mono">0</code> Toàn cảnh · Giờ Việt Nam (UTC+7)
           </div>
           <div class="source-pills" id="footer-sources"></div>
         </div>

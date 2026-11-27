@@ -27,6 +27,7 @@
   const TAB_TITLES = {
     strategy: "Chiến lược & VN-Index",
     bctc: "BCTC × Vĩ mô Pro",
+    wyckoff: "Wyckoff VSA × Vĩ mô",
     macro: "Lạm phát · PMI · Lao động",
     rates: "FedWatch & Lợi suất",
     fx: "Tỷ giá · Vàng SJC · SBV",
@@ -135,6 +136,7 @@
       }
     });
     window.BctcModule?.onResize();
+    window.WyckoffModule?.onResize();
   }
 
   function getChart(id) {
@@ -172,6 +174,7 @@
     });
     if (state.data) renderVisibleWorkspace();
     window.BctcModule?.onThemeChange();
+    window.WyckoffModule?.onThemeChange();
   }
 
   function applySidebarState(collapsed) {
@@ -241,6 +244,9 @@
     }
     if (tab === "bctc" || tab === "all") {
       window.BctcModule?.onShow();
+    }
+    if (tab === "wyckoff" || tab === "all") {
+      window.WyckoffModule?.onShow();
     }
   }
 
@@ -1238,8 +1244,10 @@
               </div>
               <div class="leader-foot mono">
                 <span>YTD: <strong style="color:${ytdCol}">${fmtSigned(st.pct_ytd, 1, "%")}</strong></span>
-                <span>1M: <strong>${fmtSigned(st.pct_30d, 1, "%")}</strong></span>
-                <button type="button" class="btn-open-bctc-mini" data-open-bctc="${esc(st.ticker)}">Soi BCTC →</button>
+                <span style="display:inline-flex;gap:5px">
+                  <button type="button" class="btn-open-bctc-mini" data-open-bctc="${esc(st.ticker)}">BCTC</button>
+                  <button type="button" class="btn-open-bctc-mini" data-open-wyckoff="${esc(st.ticker)}">Wyckoff</button>
+                </span>
               </div>
             </article>`;
         })
@@ -1322,8 +1330,10 @@
             </div>
             <div class="leader-foot mono">
               <span>YTD: <strong style="color:${ytdCol}">${st.pct_ytd != null ? fmtSigned(st.pct_ytd, 1, "%") : "—"}</strong></span>
-              <span>MA50: <strong>${st.ma50 ? Math.round(st.ma50).toLocaleString("vi-VN") : "—"}</strong></span>
-              <button type="button" class="btn-open-bctc-mini" data-open-bctc="${esc(st.ticker)}">Soi BCTC →</button>
+              <span style="display:inline-flex;gap:5px">
+                <button type="button" class="btn-open-bctc-mini" data-open-bctc="${esc(st.ticker)}">BCTC</button>
+                <button type="button" class="btn-open-bctc-mini" data-open-wyckoff="${esc(st.ticker)}">Wyckoff</button>
+              </span>
             </div>
           </article>`;
       })
@@ -2742,21 +2752,26 @@
       switchTab(btn.dataset.tab);
     });
 
-    // Keyboard shortcuts 1..6 & 0 (when not typing in search input)
+    // Keyboard shortcuts 1..7 & 0 (when not typing in search input)
     window.addEventListener("keydown", (e) => {
       if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT")) return;
-      const map = { "1": "strategy", "2": "macro", "3": "rates", "4": "fx", "5": "news", "6": "bctc", "0": "all" };
+      const map = { "1": "strategy", "2": "macro", "3": "rates", "4": "fx", "5": "news", "6": "bctc", "7": "wyckoff", "0": "all" };
       if (map[e.key]) switchTab(map[e.key]);
     });
 
-    // Global 1-click jump from any Leader Card or Watchlist Card -> BCTC × Vĩ mô Deep-Dive
+    // Global 1-click jump from any Leader Card or Watchlist Card -> BCTC or Wyckoff Deep-Dive
     document.addEventListener("click", (e) => {
-      const btn = e.target.closest("[data-open-bctc]");
-      if (!btn) return;
-      const tk = btn.dataset.openBctc;
-      if (!tk) return;
-      switchTab("bctc");
-      window.BctcModule?.openFromOutside(tk);
+      const btnB = e.target.closest("[data-open-bctc]");
+      if (btnB && btnB.dataset.openBctc) {
+        switchTab("bctc");
+        window.BctcModule?.openFromOutside(btnB.dataset.openBctc);
+        return;
+      }
+      const btnW = e.target.closest("[data-open-wyckoff]");
+      if (btnW && btnW.dataset.openWyckoff) {
+        switchTab("wyckoff");
+        window.WyckoffModule?.openFromOutside(btnW.dataset.openWyckoff);
+      }
     });
 
     // Explicit Dark / Light Theme Switcher
