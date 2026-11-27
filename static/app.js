@@ -26,6 +26,7 @@
 
   const TAB_TITLES = {
     strategy: "Chiến lược & VN-Index",
+    bctc: "BCTC × Vĩ mô Pro",
     macro: "Lạm phát · PMI · Lao động",
     rates: "FedWatch & Lợi suất",
     fx: "Tỷ giá · Vàng SJC · SBV",
@@ -133,6 +134,7 @@
         ch.resize();
       }
     });
+    window.BctcModule?.onResize();
   }
 
   function getChart(id) {
@@ -169,6 +171,7 @@
       btn.setAttribute("aria-pressed", isAct ? "true" : "false");
     });
     if (state.data) renderVisibleWorkspace();
+    window.BctcModule?.onThemeChange();
   }
 
   function applySidebarState(collapsed) {
@@ -235,6 +238,9 @@
     // Whenever user opens the Calendar tab, trigger an ultra-fast live US 3-star sync!
     if (tab === "news" || tab === "all") {
       refreshCalendarOnly(false);
+    }
+    if (tab === "bctc" || tab === "all") {
+      window.BctcModule?.onShow();
     }
   }
 
@@ -1233,7 +1239,7 @@
               <div class="leader-foot mono">
                 <span>YTD: <strong style="color:${ytdCol}">${fmtSigned(st.pct_ytd, 1, "%")}</strong></span>
                 <span>1M: <strong>${fmtSigned(st.pct_30d, 1, "%")}</strong></span>
-                ${thirdFoot}
+                <button type="button" class="btn-open-bctc-mini" data-open-bctc="${esc(st.ticker)}">Soi BCTC →</button>
               </div>
             </article>`;
         })
@@ -1317,7 +1323,7 @@
             <div class="leader-foot mono">
               <span>YTD: <strong style="color:${ytdCol}">${st.pct_ytd != null ? fmtSigned(st.pct_ytd, 1, "%") : "—"}</strong></span>
               <span>MA50: <strong>${st.ma50 ? Math.round(st.ma50).toLocaleString("vi-VN") : "—"}</strong></span>
-              <span>Đỉnh 52T: <strong>${st.drawdown_52w != null ? fmtSigned(st.drawdown_52w, 0, "%") : "—"}</strong></span>
+              <button type="button" class="btn-open-bctc-mini" data-open-bctc="${esc(st.ticker)}">Soi BCTC →</button>
             </div>
           </article>`;
       })
@@ -2736,11 +2742,21 @@
       switchTab(btn.dataset.tab);
     });
 
-    // Keyboard shortcuts 1..5 & 0 (when not typing in search input)
+    // Keyboard shortcuts 1..6 & 0 (when not typing in search input)
     window.addEventListener("keydown", (e) => {
-      if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
-      const map = { "1": "strategy", "2": "macro", "3": "rates", "4": "fx", "5": "news", "0": "all" };
+      if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT")) return;
+      const map = { "1": "strategy", "2": "macro", "3": "rates", "4": "fx", "5": "news", "6": "bctc", "0": "all" };
       if (map[e.key]) switchTab(map[e.key]);
+    });
+
+    // Global 1-click jump from any Leader Card or Watchlist Card -> BCTC × Vĩ mô Deep-Dive
+    document.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-open-bctc]");
+      if (!btn) return;
+      const tk = btn.dataset.openBctc;
+      if (!tk) return;
+      switchTab("bctc");
+      window.BctcModule?.openFromOutside(tk);
     });
 
     // Explicit Dark / Light Theme Switcher

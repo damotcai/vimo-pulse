@@ -7,9 +7,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=4" />
+  <link rel="stylesheet" href="/static/styles.css?v=5" />
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js" defer></script>
-  <script src="/static/app.js?v=4" defer></script>
+  <script src="/static/bctc_module.js?v=5" defer></script>
+  <script src="/static/app.js?v=5" defer></script>
 </head>
 <body>
   <div class="app-shell" id="app-shell">
@@ -53,6 +54,16 @@
           </span>
           <span class="ws-label">Chiến lược &amp; VN-Index</span>
           <span class="ws-key">1</span>
+        </button>
+
+        <button class="ws-tab" data-tab="bctc" data-tooltip="Phân tích BCTC × Vĩ mô (Phím 6)" role="tab" aria-selected="false">
+          <span class="ws-ico" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
+            </svg>
+          </span>
+          <span class="ws-label">BCTC × Vĩ mô Pro</span>
+          <span class="ws-key">6</span>
         </button>
 
         <button class="ws-tab" data-tab="macro" data-tooltip="Lạm phát · PMI · Lao động (Phím 2)" role="tab" aria-selected="false">
@@ -1008,12 +1019,421 @@
             </div>
           </section>
         </div>
+
+        <!-- =====================================================================
+             WORKSPACE 6: PHÂN TÍCH BCTC × VĨ MÔ PRO (TOP-DOWN × BOTTOM-UP FUSION)
+             ===================================================================== -->
+        <div class="ws-pane" data-pane="bctc">
+          <section class="section">
+            <div class="section-head">
+              <div>
+                <span class="eyebrow">TIẾN HOÁ ĐỊNH LƯỢNG · TOP-DOWN VĨ MÔ × BOTTOM-UP BCTC</span>
+                <h2 class="section-title">Phân tích Báo cáo Tài chính Kết hợp Vĩ mô Hiện tại</h2>
+                <p class="section-desc">Tự động điều chỉnh Chi phí vốn (Ke/WACC), nén/mở định giá &amp; đo 6 kênh truyền dẫn Vĩ mô sống vào đúng cấu trúc BCTC từng doanh nghiệp (Ngân hàng TT49 · Chứng khoán TT210 · Doanh nghiệp TT200)</p>
+              </div>
+              <div class="controls-row">
+                <div class="segmented" id="bctc-scenario-group" title="Mô phỏng kịch bản vĩ mô lên toàn bộ định giá BCTC">
+                  <button class="seg-btn active" data-scenario="live">Vĩ mô Thực tế</button>
+                  <button class="seg-btn" data-scenario="dovish">Kịch bản Hạ lãi (Bull)</button>
+                  <button class="seg-btn" data-scenario="shock">Sốc Lãi suất (Bear)</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Live Macro Bridge Strip + Scrape Toolbar -->
+            <div class="bctc-top-bar">
+              <div class="bctc-macro-pills" id="bctc-macro-bar">
+                <span class="source-tag">Đang đồng bộ bối cảnh Vĩ mô sống...</span>
+              </div>
+              <div class="bctc-scrape-controls">
+                <input type="text" id="bctc-scrape-input" class="wl-input mono" placeholder="Cào BCTC mã bất kỳ (vd: MBB, TCB, GAS)..." maxlength="10" aria-label="Nhập mã cổ phiếu để cào BCTC" />
+                <button type="button" id="btn-bctc-scrape" class="btn-primary">Cào &amp; Soi BCTC</button>
+                <button type="button" id="btn-bctc-refresh-all" class="btn-icon" title="Cập nhật mới nhất rổ 8 ngành tiêu biểu">Cập nhật 8 ngành</button>
+              </div>
+            </div>
+            <div class="bctc-status-msg hidden" id="bctc-status-msg"></div>
+
+            <!-- VIEW A: MA TRẬN XẾP HẠNG BCTC × VĨ MÔ -->
+            <div id="bctc-matrix-view">
+              <div class="bctc-summary-callout" id="bctc-pf-summary">Đang tải Ma trận Hợp nhất BCTC × Vĩ mô...</div>
+
+              <div class="panel">
+                <div class="panel-head compact">
+                  <div>
+                    <h3 class="panel-title">Bảng Xếp hạng Hợp nhất BCTC × Vĩ mô (So sánh Định giá Tĩnh vs Chỉnh Vĩ mô)</h3>
+                    <p class="panel-sub">Nhấp vào bất kỳ cổ phiếu nào để mở báo cáo BCTC, truyền dẫn Vĩ mô, đọc bảng cân đối, định giá What-If &amp; AI Memo</p>
+                  </div>
+                  <span class="source-tag" id="bctc-cached-badge">0 mã</span>
+                </div>
+                <div class="table-wrap">
+                  <table class="data-table mono-nums bctc-matrix-table" id="table-bctc-matrix">
+                    <thead>
+                      <tr>
+                        <th>Mã</th>
+                        <th>Ngành</th>
+                        <th>Kỳ</th>
+                        <th>Thị giá</th>
+                        <th>FV BCTC tĩnh</th>
+                        <th>FV Chỉnh Vĩ mô</th>
+                        <th>Upside thực</th>
+                        <th>P/E · P/B</th>
+                        <th>ROE</th>
+                        <th>BCTC</th>
+                        <th>Hợp Vĩ mô</th>
+                        <th>Hợp nhất</th>
+                        <th>Rủi ro</th>
+                        <th>Khuyến nghị Hợp nhất</th>
+                      </tr>
+                    </thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="grid-2-equal mt-sm">
+                <div class="panel">
+                  <div class="panel-head compact">
+                    <div>
+                      <h3 class="panel-title">Bản đồ Điểm Hợp nhất BCTC × Vĩ mô vs Upside Thực (%)</h3>
+                      <p class="panel-sub">Góc trên–phải: BCTC tốt + Hợp vĩ mô + Biên an toàn cao</p>
+                    </div>
+                  </div>
+                  <div class="chart-box chart-md" id="chart-bctc-scatter"></div>
+                </div>
+
+                <div class="panel">
+                  <div class="panel-head compact">
+                    <div>
+                      <h3 class="panel-title">Phân bổ Cổ phiếu Đồng bộ theo La bàn Vĩ mô</h3>
+                      <p class="panel-sub" id="bctc-alloc-sub">Hiển thị cả % trong rổ Cổ phiếu &amp; % trên Tổng tài sản (NAV)</p>
+                    </div>
+                  </div>
+                  <div class="bctc-alloc-list" id="bctc-alloc-list"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- VIEW B: PHÂN TÍCH CHUYÊN SÂU 1 CỔ PHIẾU (BCTC × VĨ MÔ) -->
+            <div id="bctc-detail-view" class="hidden">
+              <div class="bctc-detail-nav">
+                <button type="button" class="btn-icon" id="btn-bctc-back">← Quay lại Ma trận</button>
+                <div class="bctc-ticker-chips" id="bctc-ticker-chips"></div>
+              </div>
+
+              <!-- Company Hero -->
+              <div class="panel bctc-hero-panel">
+                <div class="bctc-hero-left">
+                  <div class="bctc-hero-badges">
+                    <h2 class="bctc-hero-sym mono" id="bd-ticker">—</h2>
+                    <span class="badge-soft" id="bd-sector">—</span>
+                    <span class="source-tag" id="bd-model">—</span>
+                    <span class="source-tag" id="bd-period">—</span>
+                  </div>
+                  <div class="bctc-hero-name" id="bd-name">—</div>
+                </div>
+                <div class="bctc-hero-right">
+                  <div class="bctc-hero-metric">
+                    <div class="mini-label">Thị giá hiện tại</div>
+                    <div class="bctc-hero-price mono" id="bd-price">—</div>
+                    <div class="mini-label mono" id="bd-mcap">—</div>
+                  </div>
+                  <div class="bctc-hero-metric">
+                    <div class="mini-label">Khuyến nghị Hợp nhất</div>
+                    <div class="bctc-hero-verdict" id="bd-verdict">—</div>
+                    <div class="mini-label mono" id="bd-fair-line">—</div>
+                  </div>
+                  <div class="bctc-score-badge">
+                    <div class="bctc-score-big mono" id="bd-score">—</div>
+                    <div class="bctc-score-sub mono" id="bd-score-split">BCTC — · Vĩ mô —</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 5 Deep-Dive Sub-tabs -->
+              <div class="bctc-subtabs" id="bctc-subtabs">
+                <button type="button" class="pill-btn active" data-subtab="overview">1. Chiến lược &amp; Giao điểm Vĩ mô</button>
+                <button type="button" class="pill-btn" data-subtab="charts">2. Biểu đồ Tài chính &amp; Giá</button>
+                <button type="button" class="pill-btn" data-subtab="statements">3. Đọc BCTC &amp; Thuyết minh</button>
+                <button type="button" class="pill-btn" data-subtab="valuation">4. Định giá Động &amp; What-If</button>
+                <button type="button" class="pill-btn" data-subtab="memo">5. Nhận định Buy-Side &amp; AI Q&amp;A</button>
+              </div>
+
+              <!-- SUBTAB 1: OVERVIEW + MACRO TRANSMISSION -->
+              <div class="bctc-subpane active" id="bctc-sub-overview">
+                <div class="bctc-summary-callout" id="bd-should-invest"></div>
+
+                <!-- Pure BCTC vs Macro-Adjusted Comparison Card -->
+                <div class="panel mt-sm">
+                  <div class="panel-head compact">
+                    <div>
+                      <h3 class="panel-title">So sánh Trước &amp; Sau khi Kết hợp Vĩ mô Hiện tại</h3>
+                      <p class="panel-sub" id="bd-adj-reason">—</p>
+                    </div>
+                    <span class="badge-live" id="bd-ke-tag">Ke động: —</span>
+                  </div>
+                  <div class="bctc-compare-grid" id="bd-compare-grid"></div>
+                </div>
+
+                <!-- 6 Macro-to-BCTC Transmission Channels -->
+                <div class="panel mt-sm">
+                  <div class="panel-head compact">
+                    <div>
+                      <h3 class="panel-title">Truyền dẫn Vĩ mô Sống vào Cấu trúc BCTC</h3>
+                      <p class="panel-sub">Cách lãi suất Fed/US 10Y, PMI, Lạm phát, Tỷ giá &amp; Thanh khoản HOSE tác động thực tế vào doanh nghiệp này</p>
+                    </div>
+                  </div>
+                  <div class="bctc-impacts-grid" id="bd-macro-impacts"></div>
+                </div>
+
+                <!-- 8 Core KPIs -->
+                <div class="bctc-kpi-strip mt-sm" id="bd-kpi-strip"></div>
+
+                <!-- Price Plan + 6-Pillar Radar -->
+                <div class="grid-2-rates mt-sm">
+                  <div class="panel">
+                    <div class="panel-head compact">
+                      <div>
+                        <h3 class="panel-title">Kế hoạch Giải ngân &amp; Quản trị Vị thế</h3>
+                        <p class="panel-sub" id="bd-style-horizon">—</p>
+                      </div>
+                      <span class="source-tag" id="bd-alloc-tag">—</span>
+                    </div>
+                    <div class="bctc-pp-grid" id="bd-price-plan"></div>
+                    <div class="bctc-strat-lists">
+                      <div>
+                        <h4>Chiến lược hành động</h4>
+                        <ul class="bctc-ul" id="bd-tactics"></ul>
+                      </div>
+                      <div>
+                        <h4>Động lực tăng giá (Catalysts)</h4>
+                        <ul class="bctc-ul" id="bd-drivers"></ul>
+                      </div>
+                      <div>
+                        <h4>Điều kiện phá vỡ luận điểm (BCTC &amp; Vĩ mô)</h4>
+                        <ul class="bctc-ul warn" id="bd-invalidations"></ul>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="panel">
+                    <div class="panel-head compact">
+                      <div>
+                        <h3 class="panel-title">La bàn 6 Trụ cột (5 BCTC + 1 Hợp Vĩ mô)</h3>
+                        <p class="panel-sub">Cân bằng nội tại doanh nghiệp &amp; chu kỳ vĩ mô</p>
+                      </div>
+                    </div>
+                    <div class="chart-box chart-sm" id="chart-bctc-radar" style="height:230px"></div>
+                    <div class="pillars-list mt-sm" id="bd-pillar-bars"></div>
+                  </div>
+                </div>
+
+                <!-- Sector Specific Metrics -->
+                <div class="panel mt-sm">
+                  <div class="panel-head compact">
+                    <div>
+                      <h3 class="panel-title" id="bd-sec-title">Chỉ số Chuyên sâu Đặc thù Ngành</h3>
+                      <p class="panel-sub">Tự động nhận diện chuẩn kế toán TT49 (Ngân hàng) · TT210 (Chứng khoán) · TT200 (Doanh nghiệp)</p>
+                    </div>
+                  </div>
+                  <div class="bctc-sector-grid" id="bd-sector-grid"></div>
+                </div>
+
+                <!-- Strengths & Red Flags -->
+                <div class="grid-2-equal mt-sm">
+                  <div class="panel">
+                    <div class="panel-head compact"><h3 class="panel-title">Điểm sáng BCTC (Bull Case)</h3></div>
+                    <ul class="bctc-ul good" id="bd-strengths"></ul>
+                  </div>
+                  <div class="panel">
+                    <div class="panel-head compact"><h3 class="panel-title">Cảnh báo Rủi ro (Red Flags BCTC &amp; Vĩ mô)</h3></div>
+                    <div class="bctc-flags-list" id="bd-red-flags"></div>
+                  </div>
+                </div>
+
+                <!-- Corporate Forensics (Piotroski, DuPont, Altman) -->
+                <div class="panel mt-sm hidden" id="bd-forensics-panel">
+                  <div class="panel-head compact">
+                    <div>
+                      <h3 class="panel-title">Kiểm toán Sức khỏe Định lượng: Piotroski F-Score (9 tiêu chí), DuPont &amp; Altman Z-Score</h3>
+                    </div>
+                  </div>
+                  <div class="grid-2-equal">
+                    <div id="bd-piotroski-box"></div>
+                    <div id="bd-dupont-box"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- SUBTAB 2: CHARTS -->
+              <div class="bctc-subpane" id="bctc-sub-charts">
+                <div class="controls-row" style="margin-bottom:12px">
+                  <div class="segmented" id="bctc-chart-period-group">
+                    <button class="seg-btn active" data-period="yearly">Theo Năm</button>
+                    <button class="seg-btn" data-period="quarterly">Theo Quý (12 quý)</button>
+                  </div>
+                </div>
+                <div class="grid-2-equal">
+                  <div class="panel">
+                    <div class="panel-head compact"><h3 class="panel-title">Doanh thu / TOI &amp; Lợi nhuận Sau thuế (Tỷ VND)</h3></div>
+                    <div class="chart-box chart-md" id="chart-bctc-rev"></div>
+                  </div>
+                  <div class="panel">
+                    <div class="panel-head compact"><h3 class="panel-title" id="bd-margin-chart-title">Hiệu quả Sinh lời &amp; Biên lợi nhuận (%)</h3></div>
+                    <div class="chart-box chart-md" id="chart-bctc-margin"></div>
+                  </div>
+                  <div class="panel">
+                    <div class="panel-head compact"><h3 class="panel-title" id="bd-cash-chart-title">Dòng tiền Kinh doanh (OCF) vs LNST vs FCF</h3></div>
+                    <div class="chart-box chart-md" id="chart-bctc-cash"></div>
+                  </div>
+                  <div class="panel">
+                    <div class="panel-head compact"><h3 class="panel-title">Giá Cổ phiếu (1 Năm) · MA50 / MA200 &amp; Giá trị Hợp lý</h3></div>
+                    <div class="chart-box chart-md" id="chart-bctc-price"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- SUBTAB 3: FINANCIAL STATEMENTS -->
+              <div class="bctc-subpane" id="bctc-sub-statements">
+                <div class="panel">
+                  <div class="panel-toolbar">
+                    <div class="segmented" id="bctc-stmt-sec-group">
+                      <button class="seg-btn active" data-sec="INCOME_STATEMENT">KQ Kinh doanh</button>
+                      <button class="seg-btn" data-sec="BALANCE_SHEET">Cân đối Kế toán</button>
+                      <button class="seg-btn" data-sec="CASH_FLOW">Lưu chuyển Tiền tệ</button>
+                      <button class="seg-btn" data-sec="NOTE">Thuyết minh</button>
+                    </div>
+                    <div class="segmented" id="bctc-stmt-per-group">
+                      <button class="seg-btn active" data-per="years">Năm</button>
+                      <button class="seg-btn" data-per="quarters">Quý</button>
+                    </div>
+                    <input type="search" id="bctc-stmt-search" class="wl-input" style="text-transform:none;width:240px" placeholder="Tìm khoản mục (nợ xấu, tồn kho, margin)..." />
+                    <button type="button" id="btn-bctc-export" class="btn-primary">⬇ Xuất Excel</button>
+                  </div>
+                  <div class="table-wrap bctc-stmt-scroll">
+                    <table class="data-table mono-nums bctc-stmt-table" id="table-bctc-stmt">
+                      <thead></thead>
+                      <tbody></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <!-- SUBTAB 4: INTERACTIVE VALUATION -->
+              <div class="bctc-subpane" id="bctc-sub-valuation">
+                <div class="grid-2-rates">
+                  <div class="panel">
+                    <div class="panel-head compact">
+                      <div>
+                        <h3 class="panel-title">Mô phỏng Định giá Động (What-If)</h3>
+                        <p class="panel-sub">Tự động neo theo WACC/Ke vĩ mô hiện tại — kéo thanh trượt để kiểm tra độ nhạy</p>
+                      </div>
+                    </div>
+                    <div class="bctc-sliders">
+                      <div class="bctc-slider-row">
+                        <label>Chi phí vốn (WACC / Ke): <strong class="mono" id="lbl-bd-wacc">14.5%</strong></label>
+                        <input type="range" id="inp-bd-wacc" min="9" max="19" step="0.5" value="14.5" />
+                      </div>
+                      <div class="bctc-slider-row">
+                        <label>Tăng trưởng dòng tiền 5 năm (g): <strong class="mono" id="lbl-bd-g5">10.0%</strong></label>
+                        <input type="range" id="inp-bd-g5" min="0" max="24" step="1" value="10" />
+                      </div>
+                      <div class="bctc-slider-row">
+                        <label>Tăng trưởng dài hạn (Terminal g): <strong class="mono" id="lbl-bd-gt">3.5%</strong></label>
+                        <input type="range" id="inp-bd-gt" min="1" max="6" step="0.5" value="3.5" />
+                      </div>
+                      <div class="bctc-slider-row">
+                        <label>ROE bền vững (Justified P/B): <strong class="mono" id="lbl-bd-roe">16.0%</strong></label>
+                        <input type="range" id="inp-bd-roe" min="6" max="30" step="0.5" value="16" />
+                      </div>
+                      <div class="bctc-slider-row">
+                        <label>P/E mục tiêu (0 = tự động theo vĩ mô): <strong class="mono" id="lbl-bd-pe">Tự động</strong></label>
+                        <input type="range" id="inp-bd-pe" min="0" max="28" step="0.5" value="0" />
+                      </div>
+                      <div class="controls-row">
+                        <button type="button" id="btn-bd-run-val" class="btn-primary">Tính lại Định giá</button>
+                        <button type="button" id="btn-bd-reset-val" class="btn-icon">Theo Vĩ mô live</button>
+                      </div>
+                    </div>
+                    <div class="subcard mt-sm" id="bd-val-bands"></div>
+                  </div>
+
+                  <div class="panel">
+                    <div class="panel-head compact"><h3 class="panel-title">Chi tiết Các Mô hình Định giá (Đã chỉnh Vĩ mô)</h3></div>
+                    <div class="bctc-kpi-strip compact" id="bd-val-strip"></div>
+                    <div class="table-wrap mt-sm">
+                      <table class="data-table mono-nums" id="table-bd-val-models">
+                        <thead>
+                          <tr>
+                            <th>Phương pháp</th>
+                            <th>Trọng số</th>
+                            <th>Giá trị hợp lý</th>
+                            <th>Cơ sở tính toán</th>
+                          </tr>
+                        </thead>
+                        <tbody></tbody>
+                      </table>
+                    </div>
+                    <div class="chart-box chart-sm mt-sm" id="chart-bctc-val" style="height:240px"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- SUBTAB 5: BUY-SIDE MEMO & AI Q&A -->
+              <div class="bctc-subpane" id="bctc-sub-memo">
+                <div class="panel">
+                  <div class="panel-head compact">
+                    <div>
+                      <h3 class="panel-title">Trợ lý Nhận định Buy-Side (BCTC × Vĩ mô · Offline 0đ / Gemini / OpenAI API)</h3>
+                      <p class="panel-sub">API Key chỉ lưu trên trình duyệt của bạn, để trống để chạy bộ phân tích định lượng Offline hoàn toàn miễn phí</p>
+                    </div>
+                  </div>
+                  <div class="bctc-ai-grid">
+                    <label>Chế độ
+                      <select id="bd-ai-provider" class="bctc-select">
+                        <option value="offline">Offline Buy-Side Engine (Miễn phí 0đ)</option>
+                        <option value="gemini">Google Gemini API</option>
+                        <option value="openai">OpenAI / DeepSeek / Ollama API</option>
+                      </select>
+                    </label>
+                    <label>Model
+                      <input type="text" id="bd-ai-model" class="search-input" placeholder="gemini-2.5-flash / gpt-4o-mini" />
+                    </label>
+                    <label>API Key (bỏ trống = Offline)
+                      <input type="password" id="bd-ai-key" class="search-input" placeholder="Nhập API key nếu dùng Online..." />
+                    </label>
+                    <label id="bd-ai-url-wrap" class="hidden">Base URL
+                      <input type="text" id="bd-ai-url" class="search-input" placeholder="https://api.openai.com/v1" />
+                    </label>
+                  </div>
+                  <div class="controls-row mt-sm">
+                    <button type="button" id="btn-bd-gen-memo" class="btn-primary">Tạo Báo cáo Hợp nhất BCTC × Vĩ mô</button>
+                    <button type="button" class="pill-btn bd-quick-q" data-q="Vĩ mô hiện tại (lãi suất, tỷ giá, PMI, VIX) ảnh hưởng thế nào đến BCTC và định giá mã này?">Tác động Vĩ mô?</button>
+                    <button type="button" class="pill-btn bd-quick-q" data-q="Nên mua hay đứng ngoài lúc này? Chia 3 đợt giải ngân ở vùng giá nào?">Nên mua không?</button>
+                    <button type="button" class="pill-btn bd-quick-q" data-q="Soi toàn bộ Red Flags BCTC và rủi ro vĩ mô cần cảnh giác nhất.">Soi Red Flags</button>
+                  </div>
+                  <div class="bctc-ask-row mt-sm">
+                    <input type="text" id="bd-ai-question" class="search-input" placeholder="Đặt câu hỏi kết hợp BCTC & vĩ mô cho mã đang xem..." />
+                    <button type="button" id="btn-bd-ask" class="btn-icon">Gửi câu hỏi</button>
+                  </div>
+                </div>
+
+                <div class="panel mt-sm">
+                  <div class="panel-head compact">
+                    <h3 class="panel-title" id="bd-memo-title">Báo cáo Nhận định Hợp nhất BCTC × Vĩ mô</h3>
+                    <button type="button" id="btn-bd-copy-memo" class="btn-icon">Sao chép Markdown</button>
+                  </div>
+                  <div class="bctc-md-body" id="bd-memo-output"></div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
       </main>
 
       <footer class="footer">
         <div class="footer-inner">
           <div>
-            <strong>VĨ MÔ PULSE</strong> · Phím tắt: <code class="mono">1</code>–<code class="mono">5</code> · <code class="mono">0</code> Toàn cảnh · Giờ Việt Nam (UTC+7)
+            <strong>VĨ MÔ PULSE</strong> · Phím tắt: <code class="mono">1</code>–<code class="mono">6</code> · <code class="mono">0</code> Toàn cảnh · Giờ Việt Nam (UTC+7)
           </div>
           <div class="source-pills" id="footer-sources"></div>
         </div>
