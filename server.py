@@ -30,6 +30,7 @@ from bctc_macro_engine import (
     scrape_universe,
 )
 from macro_fetcher import build_dashboard, fetch_calendar_fast, fetch_watchlist_stocks, get_cached_dashboard
+from wyckoff_engine import analyze_symbol_wyckoff, build_wyckoff_radar
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -280,6 +281,26 @@ class MacroHandler(BaseHTTPRequestHandler):
                 self._send_file(out_path, download_name=out_path.name, override_mime=mime)
             except Exception as exc:
                 self._send_json({"error": str(exc)}, status=500)
+            return
+
+        # --- Wyckoff VSA × Macro API Endpoints ---
+        if path == "/api/wyckoff/radar":
+            try:
+                dash = _latest_payload or get_cached_dashboard() or get_dashboard_payload(mode="live", force=False)
+                ensure_default_universe_loaded()
+                self._send_json(build_wyckoff_radar(dash))
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+            return
+
+        if path.startswith("/api/wyckoff/analyze/"):
+            symbol = path.split("/api/wyckoff/analyze/", 1)[1].strip("/").upper()
+            try:
+                dash = _latest_payload or get_cached_dashboard() or get_dashboard_payload(mode="live", force=False)
+                res = analyze_symbol_wyckoff(symbol, dash)
+                self._send_json(res)
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=404 if "Không lấy được" in str(exc) else 500)
             return
 
         if path in ("/", "/index.html"):

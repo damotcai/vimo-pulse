@@ -3061,7 +3061,9 @@ def build_dashboard(force: bool = False) -> dict[str, Any]:
             "pct": gold_vn.get("bar_spread_pct"),
             "unit": "tr",
         })
-    fx["tickers"] = vn_tickers + (fx.get("tickers") or [])
+    vn_labels_set = {"VN-Index", "VN30", "HNX", "UPCoM", "P/E VNI", "Vàng SJC"}
+    base_fx_tickers = [tk for tk in (fx.get("tickers") or []) if tk.get("label") not in vn_labels_set]
+    fx = {**fx, "tickers": vn_tickers + base_fx_tickers}
 
     ny_latest = nyfed.get("latest") or {}
     cur_effr = ny_latest.get("effr") or 3.88
