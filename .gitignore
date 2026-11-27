@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+data/source_cache.json
+data/dashboard_cache.json
+data/history_store.json
+data/*.tmp
+data/bctc/*.json
+data/bctc/*.tmp
+data/exports/
