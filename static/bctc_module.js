@@ -886,7 +886,11 @@
     localStorage.setItem("vimo_ai_prov", provider);
     localStorage.setItem("vimo_ai_model", model);
     localStorage.setItem("vimo_ai_url", baseUrl);
-    if (apiKey) localStorage.setItem("vimo_ai_key", apiKey);
+    try {
+      localStorage.removeItem("vimo_ai_key");
+      if (apiKey) sessionStorage.setItem("vimo_ai_key", apiKey);
+      else sessionStorage.removeItem("vimo_ai_key");
+    } catch (_) {}
 
     const out = $("#bd-memo-output");
     if (out) out.innerHTML = `<div class="empty-state">Đang phân tích hợp nhất BCTC × Vĩ mô cho ${esc(bState.currentTicker)}...</div>`;
@@ -1054,7 +1058,14 @@
     if (prov) {
       prov.value = localStorage.getItem("vimo_ai_prov") || "offline";
       $("#bd-ai-model").value = localStorage.getItem("vimo_ai_model") || "";
-      $("#bd-ai-key").value = localStorage.getItem("vimo_ai_key") || "";
+      try {
+        const legacyKey = localStorage.getItem("vimo_ai_key");
+        if (legacyKey && !sessionStorage.getItem("vimo_ai_key")) {
+          sessionStorage.setItem("vimo_ai_key", legacyKey);
+        }
+        localStorage.removeItem("vimo_ai_key");
+      } catch (_) {}
+      $("#bd-ai-key").value = sessionStorage.getItem("vimo_ai_key") || "";
       $("#bd-ai-url").value = localStorage.getItem("vimo_ai_url") || "";
       const syncProv = () => $("#bd-ai-url-wrap")?.classList.toggle("hidden", prov.value !== "openai");
       syncProv();

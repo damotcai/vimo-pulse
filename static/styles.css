@@ -1187,6 +1187,26 @@ body.view-all .ws-pane { display: block; }
 .rate-history-details summary { cursor: pointer; font-size: 12.4px; font-weight: 700; color: var(--accent); user-select: none; }
 .yc-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
 
+/* Vietnam Interbank Rates & 3-Tier FX KPI Strips */
+.vn-ib-kpi-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.vn-fxtier-kpi-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.vn-tier-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-left: 3.5px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+.vn-tier-card.emerald { border-left-color: var(--emerald); }
+.vn-tier-card.accent { border-left-color: var(--accent); }
+.vn-tier-card.rose { border-left-color: var(--rose); }
+.vn-tier-card.amber { border-left-color: var(--amber); }
+.vn-tier-card.violet { border-left-color: var(--violet); }
+.vn-tier-lbl { font-size: 10.6px; font-weight: 700; color: var(--text-subtle); text-transform: uppercase; letter-spacing: 0.03em; }
+.vn-tier-val { font-family: var(--font-mono); font-size: 19px; font-weight: 800; color: var(--text); margin: 3px 0 2px; line-height: 1.2; }
+.vn-tier-sub { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); line-height: 1.38; }
+
 /* SBV & VCB */
 .sbv-card { border-color: var(--emerald-border); }
 .sbv-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
@@ -2242,12 +2262,16 @@ body.modal-open { overflow: hidden; }
   .pf-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pf-form-grid button { grid-column: 1 / -1; }
   .pro-alert-grid, .tg-form-grid, .brief-doc-grid { grid-template-columns: 1fr; }
+  .vn-ib-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .vn-fxtier-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 820px) {
   .btn-brief-top span { display: none; }
 }
 @media (max-width: 600px) {
   .pf-form-grid { grid-template-columns: 1fr; }
+  .vn-ib-kpi-grid, .vn-fxtier-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vn-tier-val { font-size: 16.5px; }
   .brief-modal-backdrop { padding: 8px; }
   .brief-print-sheet { padding: 14px; }
   .brief-doc-meta { text-align: left; }

@@ -819,13 +819,35 @@
 
   function initTelegramUi() {
     const tg = loadJson(STORAGE_TG, { bot_token: "", chat_id: "" });
-    if ($("#tg-bot-token")) $("#tg-bot-token").value = tg.bot_token || "";
+    let sessTok = "";
+    try {
+      if (tg.bot_token && !sessionStorage.getItem("vimo_tg_token")) {
+        sessionStorage.setItem("vimo_tg_token", tg.bot_token);
+      }
+      if (tg.bot_token) {
+        saveJson(STORAGE_TG, { chat_id: tg.chat_id || "" });
+      }
+      sessTok = sessionStorage.getItem("vimo_tg_token") || "";
+    } catch (_) {}
+    if ($("#tg-bot-token")) $("#tg-bot-token").value = sessTok;
     if ($("#tg-chat-id")) $("#tg-chat-id").value = tg.chat_id || "";
   }
 
+  function saveTelegramCreds(creds) {
+    saveJson(STORAGE_TG, { chat_id: creds.chat_id || "" });
+    try {
+      if (creds.bot_token) sessionStorage.setItem("vimo_tg_token", creds.bot_token);
+      else sessionStorage.removeItem("vimo_tg_token");
+    } catch (_) {}
+  }
+
   function getTelegramCreds() {
+    let sessTok = "";
+    try {
+      sessTok = sessionStorage.getItem("vimo_tg_token") || "";
+    } catch (_) {}
     return {
-      bot_token: ($("#tg-bot-token")?.value || loadJson(STORAGE_TG, {}).bot_token || "").trim(),
+      bot_token: ($("#tg-bot-token")?.value || sessTok || "").trim(),
       chat_id: ($("#tg-chat-id")?.value || loadJson(STORAGE_TG, {}).chat_id || "").trim(),
     };
   }
@@ -1162,17 +1184,17 @@
 
     $("#btn-tg-save")?.addEventListener("click", () => {
       const creds = getTelegramCreds();
-      saveJson(STORAGE_TG, creds);
-      setStatus("tg-status-msg", "✅ Đã lưu cấu hình Telegram Bot cục bộ trên trình duyệt của bạn.");
+      saveTelegramCreds(creds);
+      setStatus("tg-status-msg", "✅ Đã lưu cấu hình Telegram (Bot Token lưu an toàn trong phiên sessionStorage).");
     });
     $("#btn-tg-test")?.addEventListener("click", () => {
       const creds = getTelegramCreds();
-      saveJson(STORAGE_TG, creds);
+      saveTelegramCreds(creds);
       sendTelegramText("✅ <b>VĨ MÔ PULSE</b> kết nối Telegram thành công! Bạn có thể gửi Bản tin Sáng CIO bất cứ lúc nào.");
     });
     $("#btn-tg-send-brief")?.addEventListener("click", async () => {
       const creds = getTelegramCreds();
-      saveJson(STORAGE_TG, creds);
+      saveTelegramCreds(creds);
       setStatus("tg-status-msg", "Đang tạo Bản tin Sáng CIO mới nhất để gửi Telegram...");
       try {
         const d = await apiPost("/api/briefing/morning", {

@@ -57,6 +57,10 @@
     laborMode: "dual",     // dual | yearly
     fedMode: "path",       // path | probs
     ycMode: "curve",       // curve | spread
+    vnIbMode: "interbank", // interbank | spread_fed | deposit
+    vnIbRange: 130,        // 22 | 65 | 130 | 252 | 600
+    fxTierMode: "tiers",   // tiers | spread
+    fxTierRange: 130,      // 22 | 65 | 130 | 252 | 650
     fxMode: "dual",        // dual | ytd
     fxRange: 260,          // 90 | 260 | 780 | 1400
     wbMetric: "gdp_growth",// gdp_growth | cpi_annual | unemployment
@@ -79,6 +83,12 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+  }
+
+  function safeHref(url) {
+    const raw = String(url ?? "").trim();
+    if (/^https?:\/\//i.test(raw)) return esc(raw);
+    return "#";
   }
 
   function fmtNum(v, digits = 2, suffix = "") {
@@ -1753,7 +1763,7 @@
           `<span>Báo cáo S&amp;P Global mới nhất:</span>` +
           links
             .slice(0, 3)
-            .map((l) => `<a class="ext-pill" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.title.replace("S&P Global ", ""))} ↗</a>`)
+            .map((l) => `<a class="ext-pill" href="${safeHref(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.title.replace("S&P Global ", ""))} ↗</a>`)
             .join("");
       } else {
         linksWrap.textContent = "Nguồn: ISM (Mỹ) & S&P Global (Việt Nam)";
@@ -2175,6 +2185,299 @@
         { name: `1 năm trước (${oneY.date || ""})`, type: "line", smooth: 0.25, showSymbol: false, lineStyle: { width: 1.8, type: "dotted", color: t.muted }, itemStyle: { color: t.muted }, data: tenors.map((tn) => (oneY.yields || {})[tn] ?? null) },
       ],
     }, true);
+  }
+
+  // =========================================================================
+  // 7b. Vietnam Interbank Interest Rates (ON · 1W · 2W), Policy & Deposit Rates
+  // =========================================================================
+
+  function renderVnInterbank() {
+    if (!state.data) return;
+    const sec = $("#sec-vn-interbank");
+    const ib = state.data.vn_money_fx?.interbank || { available: false };
+    if (!sec) return;
+    if (!ib.available) {
+      sec.classList.add("hidden");
+      return;
+    }
+    sec.classList.remove("hidden");
+
+    const t = getThemeTokens();
+    const lt = ib.latest || {};
+    const effr = state.data.rates?.nyfed?.latest?.effr;
+    const spreadUsd = lt.on != null && effr != null ? lt.on - effr : null;
+
+    if ($("#vn-ib-updated-tag")) {
+      $("#vn-ib-updated-tag").textContent = `${ib.updated_at || lt.date || ""} · WiData Live`;
+    }
+
+    const kpiEl = $("#vn-ib-kpis");
+    if (kpiEl) {
+      const onTone = lt.on >= 5.5 ? "rose" : lt.on >= 3.8 ? "amber" : "emerald";
+      const onStatus = lt.on >= 5.5 ? "Thanh khoản căng" : lt.on >= 3.8 ? "Trung tính · Bảo vệ tỷ giá" : "Thanh khoản dồi dào";
+      const spTone = spreadUsd == null ? "accent" : spreadUsd >= 0.5 ? "emerald" : spreadUsd <= -1.0 ? "rose" : "amber";
+      const spDesc =
+        spreadUsd == null
+          ? "So với Fed EFFR"
+          : spreadUsd >= 0
+          ? "VND cao hơn USD · Giảm áp lực tỷ giá"
+          : "VND thấp hơn USD · Tạo áp lực lên tỷ giá";
+
+      kpiEl.innerHTML = `
+        <div class="vn-tier-card ${onTone}">
+          <div class="vn-tier-lbl">Qua đêm (ON)</div>
+          <div class="vn-tier-val" style="color:${t[onTone]}">${fmtNum(lt.on, 2, "%")}</div>
+          <div class="vn-tier-sub">${onStatus}${lt.delta_on_1d != null ? ` · 1p ${fmtSigned(lt.delta_on_1d, 2, "%")}` : ""}</div>
+        </div>
+        <div class="vn-tier-card accent">
+          <div class="vn-tier-lbl">Kỳ hạn 1 Tuần (1W)</div>
+          <div class="vn-tier-val" style="color:${t.accent}">${fmtNum(lt.w1, 2, "%")}</div>
+          <div class="vn-tier-sub">${lt.delta_on_5d != null ? `ON 5 phiên: ${fmtSigned(lt.delta_on_5d, 2, "%")}` : "Thị trường liên ngân hàng"}</div>
+        </div>
+        <div class="vn-tier-card violet">
+          <div class="vn-tier-lbl">Kỳ hạn 2 Tuần (2W)</div>
+          <div class="vn-tier-val" style="color:${t.violet}">${fmtNum(lt.w2, 2, "%")}</div>
+          <div class="vn-tier-sub">Kỳ hạn ngắn chuẩn OMO</div>
+        </div>
+        <div class="vn-tier-card ${spTone}">
+          <div class="vn-tier-lbl">VND (ON) − USD (EFFR)</div>
+          <div class="vn-tier-val" style="color:${t[spTone]}">${spreadUsd != null ? fmtSigned(spreadUsd, 2, "%") : "—"}</div>
+          <div class="vn-tier-sub">${spDesc}</div>
+        </div>
+        <div class="vn-tier-card amber">
+          <div class="vn-tier-lbl">NHNN &amp; Huy động 13T</div>
+          <div class="vn-tier-val" style="font-size:15.5px;color:${t.amber}">TCV ${fmtNum(lt.policy_refinancing, 1, "%")} · CK ${fmtNum(lt.policy_discount, 1, "%")}</div>
+          <div class="vn-tier-sub">Gửi NHTM lớn: 1-3T ${fmtNum(lt.deposit_1_3m, 2, "%")} · 13T ${fmtNum(lt.deposit_13m, 2, "%")}</div>
+        </div>`;
+    }
+
+    const ch = getChart("chart-vn-interbank");
+    if (!ch) return;
+    const isNarrow = window.innerWidth < 560;
+
+    if (state.vnIbMode === "deposit") {
+      $("#vn-ib-chart-title").textContent = "Lãi suất Huy động NHTM Lớn (MBB · ACB · TCB · VPB)";
+      $("#vn-ib-chart-sub").textContent = "Theo dõi xu hướng mặt bằng lãi suất đầu vào thị trường 1 (dân cư) ở 3 nhóm kỳ hạn chính";
+      const dep = (ib.deposit_series || []).slice(-state.vnIbRange);
+      ch.setOption(
+        {
+          tooltip: { ...baseTooltip(), valueFormatter: (v) => (v == null ? "—" : `${Number(v).toFixed(2)}%`) },
+          legend: { top: 0, type: "scroll", textStyle: { color: t.muted, fontSize: isNarrow ? 11 : 12 } },
+          grid: { left: 46, right: 18, top: 44, bottom: 28 },
+          xAxis: { type: "category", data: dep.map((p) => p.date), axisLabel: { color: t.muted, fontSize: 11 }, axisLine: { lineStyle: { color: t.grid } } },
+          yAxis: { type: "value", scale: true, axisLabel: { color: t.muted, formatter: "{value}%" }, splitLine: { lineStyle: { color: t.grid } } },
+          series: [
+            { name: "Kỳ hạn 13 tháng", type: "line", smooth: 0.2, showSymbol: false, lineStyle: { width: 2.6, color: t.rose }, itemStyle: { color: t.rose }, data: dep.map((p) => p.m13) },
+            { name: "Kỳ hạn 6–9 tháng", type: "line", smooth: 0.2, showSymbol: false, lineStyle: { width: 2.3, color: t.amber }, itemStyle: { color: t.amber }, data: dep.map((p) => p.m6_9) },
+            { name: "Kỳ hạn 1–3 tháng", type: "line", smooth: 0.2, showSymbol: false, lineStyle: { width: 2.2, color: t.accent }, itemStyle: { color: t.accent }, data: dep.map((p) => p.m1_3) },
+          ],
+        },
+        true
+      );
+      return;
+    }
+
+    const hist = (ib.series || []).slice(-state.vnIbRange);
+    const dates = hist.map((p) => p.date);
+
+    if (state.vnIbMode === "spread_fed") {
+      $("#vn-ib-chart-title").textContent = "Đối chiếu Lãi suất Qua đêm VN (ON) vs Fed (EFFR) & Chênh lệch VND–USD";
+      $("#vn-ib-chart-sub").textContent = "Khi thanh cột chênh lệch (VND − USD) âm sâu, dòng vốn có xu hướng găm USD làm tăng áp lực lên tỷ giá USD/VND";
+      const nyMonthly = state.data.rates?.nyfed?.monthly || [];
+      const effrByYm = new Map(nyMonthly.map((p) => [p.date, p.effr]));
+      const fallbackEffr = effr ?? (nyMonthly.length ? nyMonthly[nyMonthly.length - 1].effr : null);
+      const effrAligned = dates.map((d) => effrByYm.get(d.slice(0, 7)) ?? fallbackEffr);
+      const spreadData = hist.map((p, idx) => {
+        const ef = effrAligned[idx];
+        const v = p.on != null && ef != null ? Number((p.on - ef).toFixed(2)) : null;
+        return { value: v, itemStyle: { color: v != null && v >= 0 ? t.emerald + "70" : t.rose + "70" } };
+      });
+      ch.setOption(
+        {
+          tooltip: { ...baseTooltip(), valueFormatter: (v) => (v == null ? "—" : `${Number(v).toFixed(2)}%`) },
+          legend: { top: 0, type: "scroll", textStyle: { color: t.muted, fontSize: isNarrow ? 11 : 12 } },
+          grid: { left: 48, right: 18, top: 44, bottom: 28 },
+          xAxis: { type: "category", data: dates, axisLabel: { color: t.muted, fontSize: 11 }, axisLine: { lineStyle: { color: t.grid } } },
+          yAxis: { type: "value", axisLabel: { color: t.muted, formatter: "{value}%" }, splitLine: { lineStyle: { color: t.grid } } },
+          series: [
+            { name: "Chênh lệch VND (ON) − USD (EFFR)", type: "bar", barMaxWidth: 10, data: spreadData },
+            { name: "VN Qua đêm (ON)", type: "line", smooth: 0.15, showSymbol: false, lineStyle: { width: 2.6, color: t.accent }, itemStyle: { color: t.accent }, data: hist.map((p) => p.on) },
+            { name: "Mỹ Fed EFFR", type: "line", step: "end", showSymbol: false, lineStyle: { width: 2.2, type: "dashed", color: t.amber }, itemStyle: { color: t.amber }, data: effrAligned },
+          ],
+        },
+        true
+      );
+      return;
+    }
+
+    $("#vn-ib-chart-title").textContent = "Diễn biến Lãi suất Liên ngân hàng VND (Qua đêm · 1 Tuần · 2 Tuần)";
+    $("#vn-ib-chart-sub").textContent = "Lãi suất qua đêm tăng đột biến thường phản ánh thanh khoản VND căng thẳng hoặc NHNN hút ròng bảo vệ tỷ giá";
+    const refRate = lt.policy_refinancing || 4.5;
+    ch.setOption(
+      {
+        tooltip: { ...baseTooltip(), valueFormatter: (v) => (v == null ? "—" : `${Number(v).toFixed(2)}%`) },
+        legend: { top: 0, type: "scroll", textStyle: { color: t.muted, fontSize: isNarrow ? 11 : 12 } },
+        grid: { left: 46, right: 18, top: 44, bottom: 28 },
+        xAxis: { type: "category", data: dates, axisLabel: { color: t.muted, fontSize: 11 }, axisLine: { lineStyle: { color: t.grid } } },
+        yAxis: { type: "value", min: 0, axisLabel: { color: t.muted, formatter: "{value}%" }, splitLine: { lineStyle: { color: t.grid } } },
+        series: [
+          {
+            name: "Qua đêm (ON)",
+            type: "line",
+            smooth: 0.15,
+            showSymbol: false,
+            lineStyle: { width: 2.8, color: t.rose },
+            itemStyle: { color: t.rose },
+            areaStyle: {
+              color: {
+                type: "linear", x: 0, y: 0, x2: 0, y2: 1,
+                colorStops: [{ offset: 0, color: t.rose + "2a" }, { offset: 1, color: t.rose + "00" }],
+              },
+            },
+            data: hist.map((p) => p.on),
+            markLine: {
+              silent: true,
+              symbol: "none",
+              lineStyle: { type: "dashed", color: t.amber, width: 1.4 },
+              label: { formatter: `Tái cấp vốn NHNN ${refRate}%`, color: t.amber, fontSize: 10.5, position: "insideEndTop" },
+              data: [{ yAxis: refRate }],
+            },
+          },
+          { name: "Kỳ hạn 1 Tuần (1W)", type: "line", smooth: 0.15, showSymbol: false, lineStyle: { width: 2.2, color: t.accent }, itemStyle: { color: t.accent }, data: hist.map((p) => p.w1) },
+          { name: "Kỳ hạn 2 Tuần (2W)", type: "line", smooth: 0.15, showSymbol: false, lineStyle: { width: 1.9, type: "dashed", color: t.violet }, itemStyle: { color: t.violet }, data: hist.map((p) => p.w2) },
+        ],
+      },
+      true
+    );
+  }
+
+  // =========================================================================
+  // 8a. 3-Tier Vietnam FX Chart: Central (SBV) · Commercial (Bank) · Free (Black Market)
+  // =========================================================================
+
+  function renderVnFxTiers() {
+    if (!state.data) return;
+    const sec = $("#sec-vn-fx-tiers");
+    const ft = state.data.vn_money_fx?.fx_tiers || { available: false };
+    if (!sec) return;
+    if (!ft.available) {
+      sec.classList.add("hidden");
+      return;
+    }
+    sec.classList.remove("hidden");
+
+    const t = getThemeTokens();
+    const lt = ft.latest || {};
+    if ($("#vn-fxtier-updated-tag")) {
+      $("#vn-fxtier-updated-tag").textContent = `${ft.updated_at || lt.date || ""} · WiData & VCB Live`;
+    }
+
+    const kpiEl = $("#vn-fxtier-kpis");
+    if (kpiEl) {
+      const spPct = lt.spread_free_bank_pct;
+      const spTone = spPct == null ? "amber" : spPct >= 2.5 ? "rose" : spPct >= 1.2 ? "amber" : "emerald";
+      const spStatus = spPct == null ? "—" : spPct >= 2.5 ? "Căng thẳng đầu cơ" : spPct >= 1.2 ? "Nóng nhẹ · Theo dõi" : "Ổn định";
+      kpiEl.innerHTML = `
+        <div class="vn-tier-card emerald">
+          <div class="vn-tier-lbl">Tỷ giá Trung tâm (SBV)</div>
+          <div class="vn-tier-val" style="color:${t.emerald}">${fmtVnd(lt.central)}</div>
+          <div class="vn-tier-sub">Trần +5%: ${fmtVnd(lt.ceiling)} · Sàn -5%: ${fmtVnd(lt.floor)}</div>
+        </div>
+        <div class="vn-tier-card accent">
+          <div class="vn-tier-lbl">Thương mại (NHTM / VCB Bán)</div>
+          <div class="vn-tier-val" style="color:${t.accent}">${fmtVnd(lt.commercial_sell)}</div>
+          <div class="vn-tier-sub">${lt.gap_to_ceiling != null ? `Cách trần SBV: ${fmtVnd(lt.gap_to_ceiling)} (${lt.gap_to_ceiling_pct?.toFixed(2)}%)` : "Giá bán niêm yết NHTM"}</div>
+        </div>
+        <div class="vn-tier-card rose">
+          <div class="vn-tier-lbl">Tự do / Chợ đen (Bán ra)</div>
+          <div class="vn-tier-val" style="color:${t.rose}">${fmtVnd(lt.free_sell)}</div>
+          <div class="vn-tier-sub">${lt.free_buy ? `Mua vào tự do: ${fmtVnd(lt.free_buy)}` : "Giá bán thị trường tự do"}</div>
+        </div>
+        <div class="vn-tier-card ${spTone}">
+          <div class="vn-tier-lbl">Độ vênh Chợ đen − NHTM</div>
+          <div class="vn-tier-val" style="color:${t[spTone]}">${lt.spread_free_bank != null ? `${lt.spread_free_bank >= 0 ? "+" : ""}${Math.round(lt.spread_free_bank).toLocaleString("vi-VN")}₫` : "—"}</div>
+          <div class="vn-tier-sub">${spPct != null ? `${fmtSigned(spPct, 2, "%")} · ${spStatus}` : "—"}</div>
+        </div>`;
+    }
+
+    const ch = getChart("chart-vn-fx-tiers");
+    if (!ch) return;
+    const isNarrow = window.innerWidth < 560;
+    const hist = (ft.series || []).slice(-state.fxTierRange);
+    const dates = hist.map((p) => p.date);
+
+    if (state.fxTierMode === "spread") {
+      $("#vn-fxtier-chart-title").textContent = "Độ vênh Tỷ giá Chợ đen (Tự do) so với Ngân hàng Thương mại (VND/USD)";
+      $("#vn-fxtier-chart-sub").textContent = "Đo lường sức nóng găm giữ USD ngoài thị trường chính thức — ngưỡng cảnh báo khi chênh lệch vượt +500₫ (+2%)";
+      ch.setOption(
+        {
+          tooltip: {
+            ...baseTooltip(),
+            valueFormatter: (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${Math.round(Number(v)).toLocaleString("vi-VN")}₫`),
+          },
+          legend: { top: 0, type: "scroll", textStyle: { color: t.muted, fontSize: isNarrow ? 11 : 12 } },
+          grid: { left: isNarrow ? 54 : 62, right: 18, top: 44, bottom: 28 },
+          xAxis: { type: "category", data: dates, axisLabel: { color: t.muted, fontSize: 11 }, axisLine: { lineStyle: { color: t.grid } } },
+          yAxis: {
+            type: "value",
+            axisLabel: { color: t.muted, formatter: (v) => `${v >= 0 ? "+" : ""}${v.toLocaleString("vi-VN")}₫` },
+            splitLine: { lineStyle: { color: t.grid } },
+          },
+          series: [
+            {
+              name: "Chênh lệch Chợ đen − NHTM (VND)",
+              type: "bar",
+              barMaxWidth: 10,
+              data: hist.map((p) => ({
+                value: p.spread_free_bank,
+                itemStyle: {
+                  color: p.spread_free_bank != null && p.spread_free_bank >= 500 ? t.rose : p.spread_free_bank >= 250 ? t.amber : t.emerald,
+                  borderRadius: [3, 3, 0, 0],
+                },
+              })),
+              markLine: {
+                silent: true,
+                symbol: "none",
+                lineStyle: { type: "dashed", color: t.rose, width: 1.4 },
+                label: { formatter: "+500₫ (Nóng)", color: t.rose, fontSize: 10.5, position: "insideEndTop" },
+                data: [{ yAxis: 500 }],
+              },
+            },
+          ],
+        },
+        true
+      );
+      return;
+    }
+
+    $("#vn-fxtier-chart-title").textContent = "So sánh 3 Tầng Tỷ giá USD/VND: Trung tâm · Thương mại · Tự do (Chợ đen)";
+    $("#vn-fxtier-chart-sub").textContent = "Khi giá Chợ đen nới rộng cách biệt > 2% so với NHTM hoặc NHTM áp sát Trần +5% SBV, áp lực tỷ giá lên TTCK thường gia tăng";
+    ch.setOption(
+      {
+        tooltip: {
+          ...baseTooltip(),
+          valueFormatter: (v) => (v == null ? "—" : `${Math.round(Number(v)).toLocaleString("vi-VN")}₫`),
+        },
+        legend: { top: 0, type: "scroll", textStyle: { color: t.muted, fontSize: isNarrow ? 11 : 12 } },
+        grid: { left: isNarrow ? 58 : 66, right: 18, top: 44, bottom: 28 },
+        xAxis: { type: "category", data: dates, axisLabel: { color: t.muted, fontSize: 11 }, axisLine: { lineStyle: { color: t.grid } } },
+        yAxis: {
+          type: "value",
+          scale: true,
+          min: (v) => Math.floor((v.min - 150) / 100) * 100,
+          max: (v) => Math.ceil((v.max + 150) / 100) * 100,
+          axisLabel: { color: t.muted, fontSize: isNarrow ? 10 : 11, formatter: (v) => v.toLocaleString("vi-VN") },
+          splitLine: { lineStyle: { color: t.grid } },
+        },
+        series: [
+          { name: "Chợ đen / Tự do (Bán)", type: "line", smooth: 0.15, showSymbol: false, lineStyle: { width: 2.8, color: t.rose }, itemStyle: { color: t.rose }, data: hist.map((p) => p.free) },
+          { name: "Thương mại NHTM (Bán)", type: "line", smooth: 0.15, showSymbol: false, lineStyle: { width: 2.5, color: t.accent }, itemStyle: { color: t.accent }, data: hist.map((p) => p.commercial) },
+          { name: "Trung tâm SBV", type: "line", smooth: 0.15, showSymbol: false, lineStyle: { width: 2.2, color: t.emerald }, itemStyle: { color: t.emerald }, data: hist.map((p) => p.central) },
+          { name: "Trần SBV (+5%)", type: "line", smooth: 0.1, showSymbol: false, lineStyle: { width: 1.6, type: "dashed", color: t.amber }, itemStyle: { color: t.amber }, data: hist.map((p) => p.ceiling) },
+        ],
+      },
+      true
+    );
   }
 
   // =========================================================================
@@ -2623,7 +2926,7 @@
     list.innerHTML = filtered
       .map(
         (it) => `
-        <a class="news-card" href="${esc(it.link)}" target="_blank" rel="noopener noreferrer">
+        <a class="news-card" href="${safeHref(it.link)}" target="_blank" rel="noopener noreferrer">
           <div class="news-meta">
             <span class="news-cat ${catClass(it.category)}">${esc(it.category)}</span>
             <span class="news-source-time">${esc(it.source)} · ${esc(it.published_vn)}</span>
@@ -2643,6 +2946,7 @@
       vn_market: "HOSE / VNDirect / CafeF",
       vn_valuation: "P/E VNI & Simplize",
       gold_vn: "Vàng SJC & CafeF",
+      vn_money_fx: "LSLNH & Tỷ giá 3 Tầng",
       bls: "U.S. BLS",
       bea: "U.S. BEA",
       nyfed: "NY Fed",
@@ -2656,10 +2960,15 @@
       calendar: "US 3★ Live (TV+FXS)",
       news: "VN Policy RSS",
     };
-    el.innerHTML = Object.entries(srcs)
+    const okHtml = Object.entries(srcs)
       .filter(([, st]) => st && st.ok)
       .map(([k]) => `<span class="src-pill">${esc(names[k] || k)}</span>`)
       .join("");
+    const degraded = data.meta?.degraded_sources || [];
+    const degHtml = degraded.length
+      ? `<span class="src-pill" style="border-color:rgba(245,158,11,0.5);color:#f59e0b" title="Nguồn tạm gián đoạn: ${esc(degraded.join(", "))}">⚠ Fallback (${degraded.length})</span>`
+      : "";
+    el.innerHTML = okHtml + degHtml;
   }
 
   // Render only visible workspace panes (or all panes in Toàn cảnh mode)
@@ -2685,8 +2994,10 @@
     if (isAll || tab === "rates") {
       renderFedWatch();
       renderYieldCurve();
+      renderVnInterbank();
     }
     if (isAll || tab === "fx") {
+      renderVnFxTiers();
       renderFxAndSbv();
       renderVnGold(state.data);
       renderVnUsComparison();
@@ -2921,6 +3232,10 @@
     bindSegmented("labor-mode-group", "mode", (v) => { state.laborMode = v; renderLabor(); });
     bindSegmented("fed-mode-group", "mode", (v) => { state.fedMode = v; renderFedWatch(); });
     bindSegmented("yc-mode-group", "mode", (v) => { state.ycMode = v; renderYieldCurve(); });
+    bindSegmented("vn-ib-mode-group", "mode", (v) => { state.vnIbMode = v; renderVnInterbank(); });
+    bindSegmented("vn-ib-range-group", "range", (v) => { state.vnIbRange = Number(v); renderVnInterbank(); });
+    bindSegmented("vn-fxtier-mode-group", "mode", (v) => { state.fxTierMode = v; renderVnFxTiers(); });
+    bindSegmented("vn-fxtier-range-group", "range", (v) => { state.fxTierRange = Number(v); renderVnFxTiers(); });
     bindSegmented("fx-mode-group", "mode", (v) => { state.fxMode = v; renderFxAndSbv(); });
     bindSegmented("fx-range-group", "range", (v) => { state.fxRange = Number(v); renderFxAndSbv(); });
     bindSegmented("wb-metric-group", "metric", (v) => { state.wbMetric = v; renderVnUsComparison(); });
