@@ -38,6 +38,7 @@ DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 BASELINE_FILE = DATA_DIR / "pmi_vn_baseline.json"
+MONTHLY_SEED_FILE = DATA_DIR / "macro_monthly_seed.json"
 HISTORY_STORE_FILE = DATA_DIR / "history_store.json"
 SOURCE_CACHE_FILE = DATA_DIR / "source_cache.json"
 DASHBOARD_CACHE_FILE = DATA_DIR / "dashboard_cache.json"
@@ -259,7 +260,7 @@ def _merge_incremental_source(key: str, data: Any) -> tuple[Any, int]:
 
 
 def _init_source_cache() -> None:
-    """Hydrate in-memory cache from SQLite DB (and migrate legacy source_cache.json if present)."""
+    """Hydrate in-memory cache from SQLite DB (and seed monthly BLS/BEA baseline so charts are NEVER blank)."""
     global _source_cache, _db_bootstrapped
     with _cache_lock:
         if _db_bootstrapped:
@@ -279,6 +280,20 @@ def _init_source_cache() -> None:
                             dt, cnt = _extract_source_meta(k, v["data"])
                             macro_db.save_source_snapshot(k, v["data"], latest_date=dt, record_count=cnt, fetched_at=ts)
                             _source_cache[k] = {"ts": ts, "data": v["data"], "latest_date": dt, "record_count": cnt}
+
+        # Seed slow monthly historical US macro series (BLS/BEA) with ts=0.0 if missing from DB.
+        # ts=0.0 ensures Smart Sync still checks live for newer months, while guaranteeing 0 blank charts on Render!
+        seed = _load_json(MONTHLY_SEED_FILE, {})
+        if isinstance(seed, dict):
+            for k in ("bls", "bea"):
+                if k not in _source_cache or not _is_valid_source_data(k, (_source_cache.get(k) or {}).get("data")):
+                    s_data = seed.get(k)
+                    if _is_valid_source_data(k, s_data):
+                        merged, _ = _merge_incremental_source(k, s_data)
+                        dt, cnt = _extract_source_meta(k, merged)
+                        macro_db.save_source_snapshot(k, merged, latest_date=dt, record_count=cnt, fetched_at=0.0)
+                        _source_cache[k] = {"ts": 0.0, "data": merged, "latest_date": dt, "record_count": cnt}
+                        logger.info("Seeded SQLite DB with baseline '%s' (%d records, ts=0 for live sync).", k, cnt)
         _db_bootstrapped = True
 
 
@@ -574,7 +589,7 @@ def _compute_daily_ytd_comparison(daily_series: list[dict[str, Any]], val_key: s
 def _fetch_fred_monthly_series(series_id: str, min_year: int = 2016) -> list[dict[str, Any]]:
     """Fetch official monthly US macro series from St. Louis Fed FRED public CSV (no API key, no daily IP quota)."""
     url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-    resp = _HTTP.get(url, headers=HEADERS, timeout=12)
+    resp = _HTTP.get(url, headers=HEADERS, timeout=7)
     resp.raise_for_status()
     pts: list[dict[str, Any]] = []
     min_prefix = f"{min_year:04d}-01"
@@ -596,7 +611,7 @@ def _fetch_fred_monthly_series(series_id: str, min_year: int = 2016) -> list[dic
 
 
 def _fetch_bls_via_fred(start_year: int) -> dict[str, Any]:
-    """Failover mirror using FRED official BLS series: CPIAUCSL, CPILFESL, PPIFIS, UNRATE, PAYEMS."""
+    """Failover mirror using FRED official BLS series: CPIAUCSL, CPILFESL, PPIFIS, UNRATE, PAYEMS (max 2 concurrent to avoid FRED tarpit)."""
     fred_map = {
         "cpi": "CPIAUCSL",
         "core_cpi": "CPILFESL",
@@ -605,7 +620,7 @@ def _fetch_bls_via_fred(start_year: int) -> dict[str, Any]:
         "nfp": "PAYEMS",
     }
     raw: dict[str, list[dict[str, Any]]] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
         futs = {ex.submit(_fetch_fred_monthly_series, sid, start_year): name for name, sid in fred_map.items()}
         for fut in concurrent.futures.as_completed(futs):
             name = futs[fut]
@@ -634,22 +649,84 @@ def _fetch_bls_via_fred(start_year: int) -> dict[str, Any]:
     }
 
 
+def _fetch_bls_via_dbnomics(start_year: int) -> dict[str, Any]:
+    """Tertiary failover via DBnomics official BLS mirror (proven reachable from Render Singapore)."""
+    dbn_map = {
+        "cpi": "https://api.db.nomics.world/v22/series/BLS/cu/CUSR0000SA0?observations=1",
+        "core_cpi": "https://api.db.nomics.world/v22/series/BLS/cu/CUSR0000SA0L1E?observations=1",
+        "ppi": "https://api.db.nomics.world/v22/series/BLS/wp/WPSFD4?observations=1",
+        "unemp": "https://api.db.nomics.world/v22/series/BLS/ln/LNS14000000?observations=1",
+        "nfp": "https://api.db.nomics.world/v22/series/BLS/ce/CES0000000001?observations=1",
+    }
+    min_prefix = f"{start_year:04d}-01"
+
+    def _one(url: str) -> list[dict[str, Any]]:
+        r = _HTTP.get(url, headers=HEADERS, timeout=7)
+        r.raise_for_status()
+        doc = r.json()["series"]["docs"][0]
+        pts = [
+            {"date": p[:7], "index": float(v)}
+            for p, v in zip(doc.get("period", []), doc.get("value", []))
+            if isinstance(v, (int, float)) and str(p)[:7] >= min_prefix
+        ]
+        pts.sort(key=lambda x: x["date"])
+        return pts
+
+    raw: dict[str, list[dict[str, Any]]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+        futs = {ex.submit(_one, url): name for name, url in dbn_map.items()}
+        for fut in concurrent.futures.as_completed(futs):
+            name = futs[fut]
+            try:
+                raw[name] = fut.result()
+            except Exception:
+                raw[name] = []
+
+    cpi = _compute_yoy_mom(raw.get("cpi", []))
+    core_cpi = _compute_yoy_mom(raw.get("core_cpi", []))
+    ppi = _compute_yoy_mom(raw.get("ppi", []))
+    unemp = [{"date": p["date"], "value": round(p["index"], 1)} for p in raw.get("unemp", [])]
+    nfp_raw = raw.get("nfp", [])
+    nfp = [
+        {"date": nfp_raw[i]["date"], "total": nfp_raw[i]["index"], "change_k": round(nfp_raw[i]["index"] - nfp_raw[i - 1]["index"], 1)}
+        for i in range(1, len(nfp_raw))
+    ]
+    return {
+        "source": "U.S. Bureau of Labor Statistics (qua DBnomics Mirror)",
+        "cpi": cpi,
+        "core_cpi": core_cpi,
+        "ppi": ppi,
+        "unemployment": unemp,
+        "nfp": nfp,
+    }
+
+
 def fetch_bls_data() -> dict[str, Any]:
+    """
+    3-Tier Official US BLS Fetcher (Zero Quota-Lock on Cloud):
+      Tier 1: St. Louis Fed FRED CSV (zero IP quota, up to latest month, ~1.2s)
+      Tier 2: BLS Public API v1 (direct official fallback)
+      Tier 3: DBnomics BLS mirror (cloud-friendly tertiary fallback)
+    """
     cur_year = _now_vn().year
     start_year = max(2016, cur_year - 9)
-    series_ids = [
-        "CUSR0000SA0",
-        "CUSR0000SA0L1E",
-        "WPSFD4",
-        "LNS14000000",
-        "CES0000000001",
-    ]
+
+    # Tier 1: FRED Official BLS Mirror (fast, no 25-req/day Render IP block)
+    try:
+        fred_res = _fetch_bls_via_fred(start_year)
+        if _is_valid_source_data("bls", fred_res):
+            return fred_res
+    except Exception as exc:
+        logger.warning("FRED BLS primary failed (%s) — trying BLS v1.", type(exc).__name__)
+
+    # Tier 2: Direct BLS Public API v1
+    series_ids = ["CUSR0000SA0", "CUSR0000SA0L1E", "WPSFD4", "LNS14000000", "CES0000000001"]
     try:
         resp = _HTTP.post(
             "https://api.bls.gov/publicAPI/v1/timeseries/data/",
             json={"seriesid": series_ids, "startyear": str(start_year), "endyear": str(cur_year)},
             headers={"Content-Type": "application/json", **HEADERS},
-            timeout=9,
+            timeout=6,
         )
         resp.raise_for_status()
         payload = resp.json()
@@ -689,14 +766,15 @@ def fetch_bls_data() -> dict[str, Any]:
             }
             if _is_valid_source_data("bls", res):
                 return res
-        logger.warning("BLS v1 API returned status=%s — falling back to FRED official mirror.", payload.get("status"))
+        logger.warning("BLS v1 API returned status=%s — trying DBnomics mirror.", payload.get("status"))
     except Exception as exc:
-        logger.warning("BLS v1 API failed (%s) — falling back to FRED official mirror.", type(exc).__name__)
+        logger.warning("BLS v1 API failed (%s) — trying DBnomics mirror.", type(exc).__name__)
 
-    fred_res = _fetch_bls_via_fred(start_year)
-    if not _is_valid_source_data("bls", fred_res):
-        raise RuntimeError("Cả BLS API và FRED mirror đều tạm gián đoạn.")
-    return fred_res
+    # Tier 3: DBnomics BLS Mirror
+    dbn_res = _fetch_bls_via_dbnomics(start_year)
+    if _is_valid_source_data("bls", dbn_res):
+        return dbn_res
+    raise RuntimeError("Cả FRED, BLS v1 và DBnomics đều tạm gián đoạn.")
 
 
 # =============================================================================
@@ -3651,7 +3729,7 @@ def build_dashboard(force: bool = False, mode: str = "smart", user_check: bool =
                     source_status[label] = {"ok": False, "fresh": False}
                 return default
 
-        bls = _safe_res(f_bls, {}, 14.0, "bls")
+        bls = _safe_res(f_bls, {}, 18.0, "bls")
         bea = _safe_res(f_bea, {}, 14.0, "bea")
         nyfed = _safe_res(f_nyfed, {}, 12.0, "nyfed")
         yc = _safe_res(f_yc, {}, 12.0, "yield_curve")
