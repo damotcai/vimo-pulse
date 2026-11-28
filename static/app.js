@@ -26,6 +26,7 @@
 
   const TAB_TITLES = {
     strategy: "Chiến lược & VN-Index",
+    fusion: "Hội tụ 3-in-1 & Danh mục",
     bctc: "BCTC × Vĩ mô Pro",
     wyckoff: "Wyckoff VSA × Vĩ mô",
     macro: "Lạm phát · PMI · Lao động",
@@ -137,6 +138,7 @@
     });
     window.BctcModule?.onResize();
     window.WyckoffModule?.onResize();
+    window.ProModules?.onResize();
   }
 
   function getChart(id) {
@@ -144,6 +146,10 @@
     const el = document.getElementById(id);
     if (!el) return null;
     if (el.offsetParent === null) return null; // Skip initializing hidden tab charts until visible
+    if (charts[id] && charts[id].getDom() !== el) {
+      try { charts[id].dispose(); } catch (_) {}
+      delete charts[id];
+    }
     if (!charts[id]) {
       charts[id] = window.echarts.init(el);
     }
@@ -175,6 +181,7 @@
     if (state.data) renderVisibleWorkspace();
     window.BctcModule?.onThemeChange();
     window.WyckoffModule?.onThemeChange();
+    window.ProModules?.onThemeChange();
   }
 
   function applySidebarState(collapsed) {
@@ -248,6 +255,7 @@
     if (tab === "wyckoff" || tab === "all") {
       window.WyckoffModule?.onShow();
     }
+    window.ProModules?.onShowTab(tab);
   }
 
   // =========================================================================
@@ -1893,13 +1901,14 @@
 
     ch.setOption({
       tooltip: baseTooltip(),
-      legend: { top: 0, textStyle: { color: t.muted, fontSize: 11.5 } },
-      grid: { left: 44, right: 48, top: 36, bottom: 26 },
+      legend: { top: 0, type: "scroll", textStyle: { color: t.muted, fontSize: 11.5 } },
+      grid: { left: 46, right: 48, top: 52, bottom: 26 },
       xAxis: { type: "category", data: dates, axisLabel: { color: t.muted, fontSize: 11 }, axisLine: { lineStyle: { color: t.grid } } },
       yAxis: [
         {
           type: "value",
           name: "Thất nghiệp %",
+          nameGap: 10,
           nameTextStyle: { color: t.muted, fontSize: 10 },
           min: (v) => Math.max(0, Math.floor(v.min - 0.6)),
           max: (v) => Math.ceil(v.max + 0.6),
@@ -1909,6 +1918,7 @@
         {
           type: "value",
           name: "NFP (K)",
+          nameGap: 10,
           nameTextStyle: { color: t.muted, fontSize: 10 },
           axisLabel: { color: t.muted, formatter: "{value}K" },
           splitLine: { show: false },
@@ -2277,10 +2287,11 @@
       if (series.length) {
         series[0].markLine = { silent: true, symbol: "none", lineStyle: { type: "dashed", color: t.muted, width: 1.2 }, label: { show: false }, data: [{ yAxis: 0 }] };
       }
+      const isNarrowFx = window.innerWidth < 560;
       ch.setOption({
         tooltip: { ...baseTooltip(), valueFormatter: (v) => (v == null ? "—" : fmtSigned(v, 2, "%")) },
-        legend: { top: 0, textStyle: { color: t.muted, fontSize: 12 } },
-        grid: { left: 48, right: 18, top: 36, bottom: 26 },
+        legend: { top: 0, type: "scroll", textStyle: { color: t.muted, fontSize: isNarrowFx ? 11 : 12 } },
+        grid: { left: 48, right: 18, top: 42, bottom: 26 },
         xAxis: { type: "category", data: ytdObj.months || [], axisLabel: { color: t.muted }, axisLine: { lineStyle: { color: t.grid } } },
         yAxis: { type: "value", axisLabel: { color: t.muted, formatter: "{value}%" }, splitLine: { lineStyle: { color: t.grid } } },
         series,
@@ -2291,29 +2302,32 @@
     $("#fx-chart-title").textContent = "Diễn biến USD/VND Spot & Chỉ số DXY";
     $("#fx-chart-sub").textContent = "Đường kép 2 trục · Quan sát độ nhạy tỷ giá Việt Nam theo đồng USD toàn cầu";
     const hist = (fx.fx_dual_history || []).slice(-state.fxRange);
+    const isNarrowFxDual = window.innerWidth < 560;
 
     ch.setOption({
       tooltip: baseTooltip(),
-      legend: { top: 0, textStyle: { color: t.muted, fontSize: 12 } },
-      grid: { left: 62, right: 48, top: 38, bottom: 28 },
+      legend: { top: 0, type: "scroll", textStyle: { color: t.muted, fontSize: isNarrowFxDual ? 11 : 12 } },
+      grid: { left: isNarrowFxDual ? 54 : 62, right: isNarrowFxDual ? 40 : 48, top: isNarrowFxDual ? 56 : 50, bottom: 28 },
       xAxis: { type: "category", data: hist.map((p) => p.date), axisLabel: { color: t.muted, fontSize: 11 }, axisLine: { lineStyle: { color: t.grid } } },
       yAxis: [
         {
           type: "value",
           name: "USD/VND",
-          nameTextStyle: { color: t.amber, fontSize: 11 },
+          nameGap: 10,
+          nameTextStyle: { color: t.amber, fontSize: 10.5, align: "left" },
           min: (v) => Math.floor((v.min - 150) / 100) * 100,
           max: (v) => Math.ceil((v.max + 150) / 100) * 100,
-          axisLabel: { color: t.muted, formatter: (v) => v.toLocaleString("vi-VN") },
+          axisLabel: { color: t.muted, fontSize: isNarrowFxDual ? 10 : 11, formatter: (v) => v.toLocaleString("vi-VN") },
           splitLine: { lineStyle: { color: t.grid } },
         },
         {
           type: "value",
           name: "DXY",
-          nameTextStyle: { color: t.accent, fontSize: 11 },
+          nameGap: 10,
+          nameTextStyle: { color: t.accent, fontSize: 10.5, align: "right" },
           min: (v) => Math.floor(v.min - 1.5),
           max: (v) => Math.ceil(v.max + 1.5),
-          axisLabel: { color: t.muted },
+          axisLabel: { color: t.muted, fontSize: isNarrowFxDual ? 10 : 11 },
           splitLine: { show: false },
         },
       ],
@@ -2524,9 +2538,9 @@
           <div class="cal-time">
             <strong>${esc(ev.time_vn)}</strong>
             <span class="cal-stars" title="3 sao — Tác động rất mạnh">★★★</span>
-            <span style="display:block;font-size:10px">🇺🇸 USD</span>
+            <span class="cal-ccy">🇺🇸 USD</span>
           </div>
-          <div>
+          <div class="cal-body">
             <div class="cal-title">${esc(ev.title)}</div>
             <div class="cal-meta-row">
               <span class="cal-cat-pill">${esc(ev.category || "Vĩ mô Mỹ")}</span>
@@ -2695,10 +2709,10 @@
   // Progressive Fast Paint -> Automatic Live Sync on Every Visit
   // =========================================================================
 
-  async function fetchDashboard(mode = "live", force = false) {
+  async function fetchDashboard(mode = "live", force = false, retryCount = 0) {
     const btn = $("#btn-refresh");
     if (mode === "live") {
-      setStatus("syncing", force ? "Đang làm mới toàn bộ..." : "Đang cập nhật trực tuyến...");
+      setStatus("syncing", force ? "Đang làm mới toàn bộ..." : "Đang cập nhật dữ liệu mới nhất...");
       if (btn) btn.classList.add("spinning");
     }
 
@@ -2709,18 +2723,32 @@
       const data = await res.json();
       if (data.error) throw new Error(data.error);
 
+      // If fast cache was stale (>4h old), skip painting old data and proceed cleanly to live sync!
+      if (mode === "fast" && data._stale_skipped) {
+        setStatus("syncing", "Đang đồng bộ dữ liệu trực tuyến hôm nay...");
+        return true;
+      }
+
       renderDashboard(data);
 
       const updated = data.meta?.updated_at_vn || "";
-      const timeOnly = updated.split("·")[0]?.trim() || updated;
+      const parts = updated.split("·").map((s) => s.trim());
+      const hm = (parts[0] || "").slice(0, 5);
+      const dm = (parts[1] || "").slice(0, 5);
+      const stamp = hm && dm ? `${hm} · ${dm}` : (parts[0] || updated);
       if (mode === "live") {
-        setStatus("ok", `Cập nhật ${timeOnly}`);
+        setStatus("ok", `Cập nhật ${stamp}`);
       } else {
         setStatus("syncing", "Đang đồng bộ mới nhất...");
       }
       return true;
     } catch (err) {
       console.error("Dashboard load error:", err);
+      if (mode === "live" && retryCount < 1) {
+        setStatus("syncing", "Máy chủ đang khởi động, thử lại...");
+        await new Promise((r) => setTimeout(r, 2500));
+        return fetchDashboard(mode, force, retryCount + 1);
+      }
       if (mode === "live") setStatus("error", "Lỗi kết nối mạng");
       return false;
     } finally {
@@ -2752,18 +2780,19 @@
       switchTab(btn.dataset.tab);
     });
 
-    // Keyboard shortcuts 1..7 & 0 (when not typing in search input)
+    // Keyboard shortcuts 1..8 & 0 (when not typing in search input)
     window.addEventListener("keydown", (e) => {
       if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT")) return;
-      const map = { "1": "strategy", "2": "macro", "3": "rates", "4": "fx", "5": "news", "6": "bctc", "7": "wyckoff", "0": "all" };
+      const map = { "1": "strategy", "2": "macro", "3": "rates", "4": "fx", "5": "news", "6": "bctc", "7": "wyckoff", "8": "fusion", "0": "all" };
       if (map[e.key]) switchTab(map[e.key]);
     });
 
-    // Global 1-click jump from any Leader Card or Watchlist Card -> BCTC or Wyckoff Deep-Dive
+    // Global 1-click jump from any Leader Card, Watchlist, Fusion Matrix, Peers or Portfolio -> BCTC or Wyckoff Deep-Dive
     document.addEventListener("click", (e) => {
       const btnB = e.target.closest("[data-open-bctc]");
       if (btnB && btnB.dataset.openBctc) {
         switchTab("bctc");
+        window.ProModules?.onOpenBctcExternal();
         window.BctcModule?.openFromOutside(btnB.dataset.openBctc);
         return;
       }
@@ -2781,9 +2810,9 @@
       applyTheme(btn.dataset.setTheme);
     });
 
-    // Collapsible Left Sidebar & Mobile Slide-out Drawer
+    // Collapsible Left Sidebar & Tablet/Mobile Slide-out Drawer (<= 1200px)
     $("#btn-sidebar-toggle")?.addEventListener("click", () => {
-      if (window.innerWidth <= 1080) {
+      if (window.innerWidth <= 1200) {
         closeMobileDrawer();
       } else {
         applySidebarState(!state.sidebarCollapsed);
@@ -2900,13 +2929,26 @@
     $("#news-search")?.addEventListener("input", (e) => { state.newsQuery = e.target.value || ""; renderNews(); });
 
     let resizeTimer = null;
-    window.addEventListener("resize", () => {
+    let resizeSettleTimer = null;
+    const handleViewportResize = () => {
       clearTimeout(resizeTimer);
+      clearTimeout(resizeSettleTimer);
       resizeTimer = setTimeout(() => {
-        Object.values(charts).forEach((ch) => {
-          if (ch && ch.getDom() && ch.getDom().offsetParent !== null) ch.resize();
-        });
+        resizeVisibleCharts();
+        if (state.data && (state.activeTab === "fx" || state.activeTab === "all")) {
+          renderFxAndSbv();
+        }
       }, 120);
+      resizeSettleTimer = setTimeout(() => resizeVisibleCharts(), 320);
+    };
+    window.addEventListener("resize", handleViewportResize);
+    window.addEventListener("orientationchange", () => {
+      setTimeout(() => {
+        resizeVisibleCharts();
+        if (state.data && (state.activeTab === "fx" || state.activeTab === "all")) {
+          renderFxAndSbv();
+        }
+      }, 260);
     });
   }
 

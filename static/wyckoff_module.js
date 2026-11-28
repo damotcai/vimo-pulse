@@ -9,6 +9,9 @@
   const wState = {
     initialized: false,
     radar: null,
+    vn30: null,
+    radarScope: "core", // core | vn30
+    radarFilter: "ALL", // ALL | ACCUMULATION | MARKUP | DISTRIBUTION | MARKDOWN | VSA | RS_POS
     currentSymbol: "VNINDEX",
     currentDetail: null,
     barsCount: 120,
@@ -135,30 +138,81 @@
     });
   }
 
-  function renderRadar(data) {
+  async function loadVn30Scanner(force = false) {
+    showStatus("Đang quét chu kỳ Wyckoff VSA × Vĩ mô cho toàn bộ 30 cổ phiếu rổ VN30 (lần đầu ~5–10 giây, sau đó lưu cache 10 phút)...");
+    try {
+      const data = await apiGet(`/api/wyckoff/vn30?force=${force ? "1" : "0"}`);
+      wState.vn30 = data;
+      showStatus("");
+      renderActiveRadarTable();
+    } catch (err) {
+      showStatus(`Lỗi quét VN30 Wyckoff: ${err.message}`, true);
+    }
+  }
+
+  function renderBreadthBar(rows) {
+    const wrap = $("#wy-breadth-bar");
+    if (!wrap) return;
+    if (!rows || !rows.length) {
+      wrap.classList.add("hidden");
+      return;
+    }
+    const cnt = { ACCUMULATION: 0, MARKUP: 0, DISTRIBUTION: 0, MARKDOWN: 0 };
+    let vsaCnt = 0;
+    let rsPos = 0;
+    rows.forEach((r) => {
+      cnt[r.stage_code] = (cnt[r.stage_code] || 0) + 1;
+      if (r.latest_event && r.latest_event !== "—") vsaCnt++;
+      if (r.rs_20d != null && r.rs_20d > 0) rsPos++;
+    });
+    const tot = rows.length;
+    const pAcc = ((cnt.ACCUMULATION / tot) * 100).toFixed(0);
+    const pMk = ((cnt.MARKUP / tot) * 100).toFixed(0);
+    const pDis = ((cnt.DISTRIBUTION / tot) * 100).toFixed(0);
+    const pMd = ((cnt.MARKDOWN / tot) * 100).toFixed(0);
+    wrap.classList.remove("hidden");
+    wrap.innerHTML = `
+      <div class="wy-breadth-meta mono">
+        <span><strong>Độ rộng (${wState.radarScope === "vn30" ? "VN30" : "Rổ Cốt lõi"} · ${tot} mã):</strong></span>
+        <span style="color:var(--accent)">Tích lũy ${cnt.ACCUMULATION} (${pAcc}%)</span>
+        <span style="color:var(--emerald)">Đẩy giá ${cnt.MARKUP} (${pMk}%)</span>
+        <span style="color:var(--amber)">Phân phối ${cnt.DISTRIBUTION} (${pDis}%)</span>
+        <span style="color:var(--rose)">Đè giá ${cnt.MARKDOWN} (${pMd}%)</span>
+        <span>· VSA mới: <strong>${vsaCnt}</strong> · RS&gt;0: <strong>${rsPos}</strong></span>
+      </div>
+      <div class="wy-breadth-track">
+        <div style="width:${pAcc}%;background:var(--accent)"></div>
+        <div style="width:${pMk}%;background:var(--emerald)"></div>
+        <div style="width:${pDis}%;background:var(--amber)"></div>
+        <div style="width:${pMd}%;background:var(--rose)"></div>
+      </div>`;
+  }
+
+  function renderActiveRadarTable() {
     const t = tokens();
-    const mc = data.macro_context || {};
-    const tag = $("#wy-radar-macro-tag");
-    if (tag) {
-      tag.textContent = `La bàn Vĩ mô: ${mc.macro_score}/100 (${mc.stance_short}) · US10Y ${Number(mc.us_10y).toFixed(2)}% · VIX ${Number(mc.vix).toFixed(1)}`;
-    }
-
-    // Populate stock quick chips
-    const stockChips = $("#wy-stock-chips");
-    if (stockChips) {
-      stockChips.innerHTML = (data.stocks || [])
-        .map(
-          (s) =>
-            `<button type="button" class="pill-btn ${wState.currentSymbol === s.symbol ? "active" : ""}" data-wy-sym="${esc(s.symbol)}">${esc(s.symbol)}</button>`
-        )
-        .join("");
-    }
-
-    // Populate Scanner Table (Indices first, then stocks)
     const tbody = $("#table-wyckoff-radar tbody");
     if (!tbody) return;
-    const all = [...(data.indices || []), ...(data.stocks || [])];
-    tbody.innerHTML = all
+
+    const baseRows =
+      wState.radarScope === "vn30"
+        ? (wState.vn30?.stocks || [])
+        : [...(wState.radar?.indices || []), ...(wState.radar?.stocks || [])];
+
+    renderBreadthBar(wState.radarScope === "vn30" ? baseRows : (wState.radar?.stocks || []));
+
+    const filtered = baseRows.filter((r) => {
+      if (wState.radarFilter === "ALL") return true;
+      if (wState.radarFilter === "VSA") return r.latest_event && r.latest_event !== "—";
+      if (wState.radarFilter === "RS_POS") return r.rs_20d != null && r.rs_20d > 0;
+      return r.stage_code === wState.radarFilter;
+    });
+
+    if (!filtered.length) {
+      tbody.innerHTML = `<tr><td colspan="11" class="empty-state">Không có mã nào khớp bộ lọc chu kỳ Wyckoff hiện tại.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = filtered
       .map((r) => {
         const rsStr = r.rs_20d !== null && r.rs_20d !== undefined ? fmtSigned(r.rs_20d, 1, "%") : "—";
         const rsCol = r.rs_20d > 0 ? t.emerald : r.rs_20d < 0 ? t.rose : t.muted;
@@ -184,6 +238,27 @@
           </tr>`;
       })
       .join("");
+  }
+
+  function renderRadar(data) {
+    const mc = data.macro_context || {};
+    const tag = $("#wy-radar-macro-tag");
+    if (tag) {
+      tag.textContent = `La bàn Vĩ mô: ${mc.macro_score}/100 (${mc.stance_short}) · US10Y ${Number(mc.us_10y).toFixed(2)}% · VIX ${Number(mc.vix).toFixed(1)}`;
+    }
+
+    // Populate stock quick chips
+    const stockChips = $("#wy-stock-chips");
+    if (stockChips) {
+      stockChips.innerHTML = (data.stocks || [])
+        .map(
+          (s) =>
+            `<button type="button" class="pill-btn ${wState.currentSymbol === s.symbol ? "active" : ""}" data-wy-sym="${esc(s.symbol)}">${esc(s.symbol)}</button>`
+        )
+        .join("");
+    }
+
+    renderActiveRadarTable();
   }
 
   function renderDetail(d) {
@@ -466,6 +541,7 @@
       });
     }
 
+    const isNarrowWy = window.innerWidth < 600;
     ch.setOption({
       tooltip: {
         trigger: "axis",
@@ -475,11 +551,11 @@
         textStyle: { color: t.text, fontSize: 11.8, fontFamily: "JetBrains Mono, Inter, sans-serif" },
         axisPointer: { type: "cross", link: [{ xAxisIndex: "all" }] },
       },
-      legend: { top: 0, textStyle: { color: t.muted, fontSize: 11 } },
+      legend: { top: 0, type: "scroll", textStyle: { color: t.muted, fontSize: isNarrowWy ? 10.5 : 11 } },
       grid: [
-        { left: 64, right: 44, top: 34, height: "50%" },
-        { left: 64, right: 44, top: "61%", height: "15%" },
-        { left: 64, right: 44, top: "80%", height: "15%" },
+        { left: isNarrowWy ? 50 : 64, right: isNarrowWy ? 28 : 44, top: 36, height: "50%" },
+        { left: isNarrowWy ? 50 : 64, right: isNarrowWy ? 28 : 44, top: "61%", height: "15%" },
+        { left: isNarrowWy ? 50 : 64, right: isNarrowWy ? 28 : 44, top: "80%", height: "15%" },
       ],
       xAxis: [
         { type: "category", gridIndex: 0, data: dates, axisLabel: { show: false }, axisLine: { lineStyle: { color: t.grid } }, axisTick: { show: false } },
@@ -526,6 +602,34 @@
       if (!tr) return;
       loadSymbol(tr.dataset.wyRow);
       window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+
+    $("#wy-scope-group")?.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-wy-scope]");
+      if (!btn) return;
+      $$("#wy-scope-group button").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      wState.radarScope = btn.dataset.wyScope;
+      if (wState.radarScope === "vn30" && !wState.vn30) {
+        loadVn30Scanner(false);
+      } else {
+        renderActiveRadarTable();
+      }
+    });
+
+    $("#btn-wy-vn30-refresh")?.addEventListener("click", () => {
+      wState.radarScope = "vn30";
+      $$("#wy-scope-group button").forEach((b) => b.classList.toggle("active", b.dataset.wyScope === "vn30"));
+      loadVn30Scanner(true);
+    });
+
+    $("#wy-radar-filters")?.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-wy-filter]");
+      if (!btn) return;
+      $$("#wy-radar-filters button").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      wState.radarFilter = btn.dataset.wyFilter;
+      renderActiveRadarTable();
     });
   }
 

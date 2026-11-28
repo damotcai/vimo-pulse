@@ -2,16 +2,24 @@
 <html lang="vi" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1120" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="VĨ MÔ PULSE" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="/static/icon.svg" />
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
   <title>VĨ MÔ PULSE — Terminal Kinh tế Vĩ mô &amp; Chiến lược VN-Index</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=6" />
+  <link rel="stylesheet" href="/static/styles.css?v=8" />
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js" defer></script>
-  <script src="/static/bctc_module.js?v=6" defer></script>
-  <script src="/static/wyckoff_module.js?v=6" defer></script>
-  <script src="/static/app.js?v=6" defer></script>
+  <script src="/static/bctc_module.js?v=8" defer></script>
+  <script src="/static/wyckoff_module.js?v=8" defer></script>
+  <script src="/static/pro_modules.js?v=8" defer></script>
+  <script src="/static/app.js?v=8" defer></script>
 </head>
 <body>
   <div class="app-shell" id="app-shell">
@@ -55,6 +63,16 @@
           </span>
           <span class="ws-label">Chiến lược &amp; VN-Index</span>
           <span class="ws-key">1</span>
+        </button>
+
+        <button class="ws-tab" data-tab="fusion" data-tooltip="Hội tụ 3-in-1 · Danh mục · Cảnh báo (Phím 8)" role="tab" aria-selected="false">
+          <span class="ws-ico" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>
+            </svg>
+          </span>
+          <span class="ws-label">Hội tụ 3-in-1 &amp; Danh mục</span>
+          <span class="ws-key">8</span>
         </button>
 
         <button class="ws-tab" data-tab="bctc" data-tooltip="Phân tích BCTC × Vĩ mô (Phím 6)" role="tab" aria-selected="false">
@@ -167,6 +185,13 @@
               <span class="status-dot syncing" id="status-dot"></span>
               <span id="status-text">Đang tải...</span>
             </div>
+
+            <button class="btn-icon btn-brief-top" id="btn-open-brief" type="button" title="Mở Báo cáo Sáng CIO (In PDF / Gửi Telegram)">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+              </svg>
+              <span>Báo cáo Sáng</span>
+            </button>
 
             <!-- Explicit High-Contrast Dark / Light Theme Selector -->
             <div class="theme-switch" id="theme-switch" role="group" aria-label="Chọn giao diện Tối hoặc Sáng">
@@ -980,7 +1005,7 @@
             </div>
 
             <div class="grid-2-cal-news">
-              <div class="panel">
+              <div class="panel cal-panel">
                 <div class="panel-head compact">
                   <div>
                     <h3 class="panel-title">Lịch Kinh tế Mỹ ★★★ (Chỉ 3 Sao · GMT+7)</h3>
@@ -1043,6 +1068,10 @@
                 <p class="section-desc">Tự động điều chỉnh Chi phí vốn (Ke/WACC), nén/mở định giá &amp; đo 6 kênh truyền dẫn Vĩ mô sống vào đúng cấu trúc BCTC từng doanh nghiệp (Ngân hàng TT49 · Chứng khoán TT210 · Doanh nghiệp TT200)</p>
               </div>
               <div class="controls-row">
+                <div class="segmented" id="bctc-view-mode-group" title="Chuyển giữa Ma trận Xếp hạng & So sánh Đối thủ cùng ngành">
+                  <button class="seg-btn active" data-bctc-mode="matrix">Ma trận Xếp hạng</button>
+                  <button class="seg-btn" data-bctc-mode="peers">⚖️ So sánh Cùng Ngành</button>
+                </div>
                 <div class="segmented" id="bctc-scenario-group" title="Mô phỏng kịch bản vĩ mô lên toàn bộ định giá BCTC">
                   <button class="seg-btn active" data-scenario="live">Vĩ mô Thực tế</button>
                   <button class="seg-btn" data-scenario="dovish">Kịch bản Hạ lãi (Bull)</button>
@@ -1057,7 +1086,7 @@
                 <span class="source-tag">Đang đồng bộ bối cảnh Vĩ mô sống...</span>
               </div>
               <div class="bctc-scrape-controls">
-                <input type="text" id="bctc-scrape-input" class="wl-input mono" placeholder="Cào BCTC mã bất kỳ (vd: MBB, TCB, GAS)..." maxlength="10" aria-label="Nhập mã cổ phiếu để cào BCTC" />
+                <input type="text" id="bctc-scrape-input" class="wl-input mono" placeholder="Cào BCTC (MBB, TCB, GAS)..." maxlength="10" aria-label="Nhập mã cổ phiếu để cào BCTC" />
                 <button type="button" id="btn-bctc-scrape" class="btn-primary">Cào &amp; Soi BCTC</button>
                 <button type="button" id="btn-bctc-refresh-all" class="btn-icon" title="Cập nhật mới nhất rổ 8 ngành tiêu biểu">Cập nhật 8 ngành</button>
               </div>
@@ -1317,7 +1346,7 @@
                       <button class="seg-btn active" data-per="years">Năm</button>
                       <button class="seg-btn" data-per="quarters">Quý</button>
                     </div>
-                    <input type="search" id="bctc-stmt-search" class="wl-input" style="text-transform:none;width:240px" placeholder="Tìm khoản mục (nợ xấu, tồn kho, margin)..." />
+                    <input type="search" id="bctc-stmt-search" class="wl-input bctc-stmt-search" placeholder="Tìm khoản mục (nợ xấu, tồn kho, margin)..." />
                     <button type="button" id="btn-bctc-export" class="btn-primary">⬇ Xuất Excel</button>
                   </div>
                   <div class="table-wrap bctc-stmt-scroll">
@@ -1437,6 +1466,63 @@
                 </div>
               </div>
             </div>
+
+            <!-- VIEW C: SO SÁNH ĐỐI THỦ CÙNG NGÀNH (PEER COMPARISON) -->
+            <div id="bctc-peers-view" class="hidden">
+              <div class="panel">
+                <div class="panel-head compact">
+                  <div>
+                    <h3 class="panel-title">⚖️ So sánh Trực tiếp Đối thủ Cùng Ngành (BCTC × Định giá Vĩ mô × Wyckoff)</h3>
+                    <p class="panel-sub">Chọn nhanh 1 trong 8 nhóm ngành tiêu biểu hoặc gõ 2–5 mã bất kỳ để đặt cạnh nhau tìm Leader mạnh nhất ngành</p>
+                  </div>
+                </div>
+                <div class="bctc-top-bar" style="margin-bottom:12px">
+                  <div class="pill-tabs" id="peer-preset-tabs">
+                    <button type="button" class="pill-btn active" data-peer-preset="BANK">Ngân hàng</button>
+                    <button type="button" class="pill-btn" data-peer-preset="SECURITIES">Chứng khoán</button>
+                    <button type="button" class="pill-btn" data-peer-preset="STEEL">Thép</button>
+                    <button type="button" class="pill-btn" data-peer-preset="RETAIL">Bán lẻ</button>
+                    <button type="button" class="pill-btn" data-peer-preset="REAL_ESTATE">BĐS</button>
+                    <button type="button" class="pill-btn" data-peer-preset="TECH">Công nghệ</button>
+                    <button type="button" class="pill-btn" data-peer-preset="OIL_GAS">Dầu khí</button>
+                    <button type="button" class="pill-btn" data-peer-preset="FERTILIZER">Phân bón</button>
+                  </div>
+                  <div class="bctc-scrape-controls">
+                    <input type="text" id="peer-custom-input" class="wl-input mono" placeholder="VD: VCB, BID, CTG, MBB" maxlength="40" aria-label="Nhập 2 đến 5 mã so sánh" />
+                    <button type="button" id="btn-peer-run" class="btn-primary">So sánh ngay</button>
+                  </div>
+                </div>
+                <div class="bctc-status-msg hidden" id="peer-status-msg"></div>
+
+                <div class="bctc-kpi-strip" id="peer-leaders-grid"></div>
+
+                <div class="grid-2-rates mt-sm">
+                  <div class="panel" style="padding:14px">
+                    <div class="panel-head compact">
+                      <div>
+                        <h4 class="panel-title">Bảng Đối chiếu Chỉ số Định lượng &amp; Kỹ thuật</h4>
+                        <p class="panel-sub">Tự động tô xanh ô dẫn đầu &amp; cảnh báo đỏ ô yếu nhất mỗi dòng</p>
+                      </div>
+                    </div>
+                    <div class="table-wrap">
+                      <table class="data-table mono-nums peer-table" id="table-peer-compare">
+                        <thead></thead>
+                        <tbody></tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <div class="panel" style="padding:14px">
+                    <div class="panel-head compact">
+                      <div>
+                        <h4 class="panel-title">Bản đồ Radar 6 Trục Đối đầu</h4>
+                        <p class="panel-sub">Sinh lời · Tăng trưởng · An toàn TC · Định giá · Hợp Vĩ mô · Wyckoff</p>
+                      </div>
+                    </div>
+                    <div class="chart-box chart-md" id="chart-peer-radar"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </section>
         </div>
 
@@ -1471,7 +1557,7 @@
                 <span id="wy-stock-chips" class="pill-tabs"></span>
               </div>
               <div class="bctc-scrape-controls">
-                <input type="text" id="wy-symbol-input" class="wl-input mono" placeholder="Soi Wyckoff mã bất kỳ (vd: MBB, STB, GAS)..." maxlength="10" aria-label="Nhập mã cổ phiếu phân tích Wyckoff" />
+                <input type="text" id="wy-symbol-input" class="wl-input mono" placeholder="Soi Wyckoff (MBB, STB, GAS)..." maxlength="10" aria-label="Nhập mã cổ phiếu phân tích Wyckoff" />
                 <button type="button" id="btn-wy-analyze" class="btn-primary">Soi Wyckoff</button>
               </div>
             </div>
@@ -1578,14 +1664,31 @@
               </div>
             </div>
 
-            <!-- Multi-Market & Stock Wyckoff × Macro Scanner Radar -->
+            <!-- Multi-Market & Stock Wyckoff × Macro Scanner Radar (+ VN30 30-Stock Scanner) -->
             <div class="panel mt-sm">
               <div class="panel-head compact">
                 <div>
-                  <h3 class="panel-title">Radar Quét Chu kỳ Wyckoff × Vĩ mô (4 Chỉ số &amp; Toàn rổ Cổ phiếu)</h3>
-                  <p class="panel-sub">Nhấp vào bất kỳ dòng nào để bật đồ thị Wyckoff VSA chi tiết của chỉ số / cổ phiếu đó</p>
+                  <h3 class="panel-title">Radar Quét Chu kỳ Wyckoff × Vĩ mô (Chỉ số · BCTC · Toàn rổ VN30)</h3>
+                  <p class="panel-sub">Chuyển sang <strong>Toàn rổ VN30</strong> để quét 30 mã Bluechip &amp; đo độ rộng chu kỳ thị trường — nhấp dòng bất kỳ để mở đồ thị Wyckoff</p>
                 </div>
-                <span class="source-tag" id="wy-radar-macro-tag">La bàn Vĩ mô: —</span>
+                <div class="controls-row">
+                  <div class="segmented" id="wy-scope-group">
+                    <button class="seg-btn active" data-wy-scope="core">Rổ Cốt lõi</button>
+                    <button class="seg-btn" data-wy-scope="vn30">⚡ Toàn rổ VN30 (30 mã)</button>
+                  </div>
+                  <button type="button" class="btn-icon" id="btn-wy-vn30-refresh" title="Quét lại mới nhất 30 mã VN30">Quét lại VN30</button>
+                  <span class="source-tag" id="wy-radar-macro-tag">La bàn Vĩ mô: —</span>
+                </div>
+              </div>
+              <div class="wy-breadth-bar hidden" id="wy-breadth-bar"></div>
+              <div class="pill-tabs mt-sm" id="wy-radar-filters" style="margin-bottom:10px">
+                <button type="button" class="pill-btn active" data-wy-filter="ALL">Tất cả</button>
+                <button type="button" class="pill-btn" data-wy-filter="ACCUMULATION">Pha 1 · Tích lũy</button>
+                <button type="button" class="pill-btn" data-wy-filter="MARKUP">Pha 2 · Đẩy giá</button>
+                <button type="button" class="pill-btn" data-wy-filter="DISTRIBUTION">Pha 3 · Phân phối</button>
+                <button type="button" class="pill-btn" data-wy-filter="MARKDOWN">Pha 4 · Đè giá</button>
+                <button type="button" class="pill-btn" data-wy-filter="VSA">Có tín hiệu VSA mới</button>
+                <button type="button" class="pill-btn" data-wy-filter="RS_POS">RS khỏe hơn VN-Index</button>
               </div>
               <div class="table-wrap">
                 <table class="data-table mono-nums bctc-matrix-table" id="table-wyckoff-radar">
@@ -1610,16 +1713,238 @@
             </div>
           </section>
         </div>
+
+        <!-- =====================================================================
+             WORKSPACE 8: SIÊU HỘI TỤ 3-IN-1 (VĨ MÔ × BCTC × WYCKOFF) · DANH MỤC · CẢNH BÁO
+             ===================================================================== -->
+        <div class="ws-pane" data-pane="fusion">
+          <!-- SECTION A: UNIFIED 3-IN-1 CONVERGENCE SCREENER -->
+          <section class="section">
+            <div class="section-head">
+              <div>
+                <span class="eyebrow">CỖ MÁY CHỌN CỔ PHIẾU HỘI TỤ · VĨ MÔ 25% × BCTC 40% × WYCKOFF VSA 35%</span>
+                <h2 class="section-title">Siêu Bộ lọc Hội tụ 3-trong-1 (Tìm Cổ phiếu Kim cương &amp; Tránh Bẫy Giá trị)</h2>
+                <p class="section-desc">Hợp nhất đồng thời La bàn Vĩ mô sống + Định giá động BCTC + Dòng tiền tạo lập Wyckoff VSA trên cùng 1 bảng quyết định</p>
+              </div>
+              <div class="controls-row">
+                <div class="segmented" id="fusion-scenario-group">
+                  <button class="seg-btn active" data-scenario="live">Vĩ mô Thực tế</button>
+                  <button class="seg-btn" data-scenario="dovish">Hạ lãi (Bull)</button>
+                  <button class="seg-btn" data-scenario="shock">Sốc Lãi (Bear)</button>
+                </div>
+                <button type="button" class="btn-icon" id="btn-fusion-refresh">Quét lại 3-in-1</button>
+                <button type="button" class="btn-primary" id="btn-open-brief-card">📄 Báo cáo Sáng PDF</button>
+              </div>
+            </div>
+
+            <div class="bctc-status-msg hidden" id="fusion-status-msg"></div>
+            <div class="bctc-kpi-strip" id="fusion-kpi-strip"></div>
+            <div class="bctc-summary-callout mt-sm" id="fusion-summary">Đang hợp nhất 3 trụ cột Vĩ mô × BCTC × Wyckoff...</div>
+
+            <div class="grid-2-rates mt-sm">
+              <div class="panel">
+                <div class="panel-head compact">
+                  <div>
+                    <h3 class="panel-title">Bản đồ Tứ phân Hội tụ (BCTC × Vĩ mô vs Wyckoff VSA)</h3>
+                    <p class="panel-sub">Góc Trên–Phải = 💎 Hội tụ Kim cương · Góc Dưới–Phải = ⚠️ Bẫy Giá trị (Rẻ nhưng chưa tạo đáy)</p>
+                  </div>
+                </div>
+                <div class="chart-box chart-md" id="chart-fusion-quadrant"></div>
+              </div>
+              <div class="panel">
+                <div class="panel-head compact">
+                  <div>
+                    <h3 class="panel-title">Điểm nhấn Hội tụ &amp; Cảnh báo Bẫy Giá trị</h3>
+                    <p class="panel-sub">Ưu tiên mã đồng thuận cả 3 trụ cột — tránh bắt dao rơi ở Pha 4 Đè giá</p>
+                  </div>
+                </div>
+                <div id="fusion-highlights"></div>
+              </div>
+            </div>
+
+            <div class="panel mt-sm">
+              <div class="panel-head compact">
+                <div>
+                  <h3 class="panel-title">Ma trận Xếp hạng Tổng lực 3 Trụ cột</h3>
+                  <p class="panel-sub">Lọc nhanh theo hạng hội tụ — bấm <strong>BCTC</strong> hoặc <strong>Wyckoff</strong> trên từng dòng để mở hồ sơ chi tiết</p>
+                </div>
+                <div class="pill-tabs" id="fusion-tier-tabs">
+                  <button type="button" class="pill-btn active" data-tier="ALL">Tất cả</button>
+                  <button type="button" class="pill-btn" data-tier="DIAMOND">💎 Kim cương</button>
+                  <button type="button" class="pill-btn" data-tier="ACCUMULATE">🎯 Canh gom</button>
+                  <button type="button" class="pill-btn" data-tier="VALUE_TRAP">⚠️ Bẫy Giá trị</button>
+                  <button type="button" class="pill-btn" data-tier="MOMENTUM">⚡ Sóng KT</button>
+                  <button type="button" class="pill-btn" data-tier="AVOID">🛑 Phòng thủ</button>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table mono-nums bctc-matrix-table" id="table-fusion-matrix">
+                  <thead>
+                    <tr>
+                      <th>Mã · Ngành</th>
+                      <th>Phân loại 3-in-1</th>
+                      <th>Điểm 3-in-1</th>
+                      <th>Thị giá / FV</th>
+                      <th>Upside</th>
+                      <th>BCTC / VM</th>
+                      <th>Wyckoff · VSA</th>
+                      <th>RS 20p</th>
+                      <th>Kế hoạch Mua / TP / SL</th>
+                      <th>Chi tiết</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <!-- SECTION B: REAL PORTFOLIO TRACKER & AUTOMATED RISK GUARD -->
+          <section class="section">
+            <div class="section-head">
+              <div>
+                <h2 class="section-title">💼 Nhật ký Danh mục Thực tế &amp; Cảnh báo Quản trị Rủi ro (Risk Guard)</h2>
+                <p class="section-desc">Lưu riêng tư trên trình duyệt của bạn — tự tính Lãi/Lỗ (P&amp;L) realtime, kiểm tra ngưỡng thủng Ice Wyckoff, chạm vùng Chốt lời BCTC &amp; tỷ trọng ngành</p>
+              </div>
+              <div class="controls-row">
+                <button type="button" class="btn-icon" id="btn-pf-sample">Tải mẫu thử</button>
+                <button type="button" class="btn-icon" id="btn-pf-eval">Tính P&amp;L Live</button>
+                <button type="button" class="btn-icon" id="btn-pf-export">Xuất JSON</button>
+                <button type="button" class="btn-icon" id="btn-pf-import">Nhập JSON</button>
+                <input type="file" id="pf-file-input" accept=".json" class="hidden" />
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="pf-form-grid">
+                <input type="text" id="pf-inp-ticker" class="wl-input mono" placeholder="Mã CP (VD: FPT)" maxlength="10" />
+                <input type="number" id="pf-inp-qty" class="search-input mono" placeholder="Số lượng (CP)" min="1" step="100" />
+                <input type="number" id="pf-inp-avg" class="search-input mono" placeholder="Giá vốn (VND, vd: 95000)" min="100" step="100" />
+                <input type="text" id="pf-inp-note" class="search-input" placeholder="Ghi chú / Luận điểm mua..." maxlength="100" />
+                <button type="button" id="btn-pf-add" class="btn-primary">+ Lưu vị thế</button>
+              </div>
+              <div class="bctc-status-msg hidden mt-sm" id="pf-status-msg"></div>
+              <div class="bctc-kpi-strip mt-sm" id="pf-totals-strip"></div>
+
+              <div class="table-wrap mt-sm">
+                <table class="data-table mono-nums bctc-matrix-table" id="table-portfolio">
+                  <thead>
+                    <tr>
+                      <th>Mã</th>
+                      <th>KL · Tỷ trọng</th>
+                      <th>Giá vốn</th>
+                      <th>Thị giá Live</th>
+                      <th>Lãi / Lỗ (P&amp;L)</th>
+                      <th>Pha Wyckoff</th>
+                      <th>Stop Ice / TP1</th>
+                      <th>Risk Guard</th>
+                      <th>Thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+
+              <div class="grid-2-rates mt-sm">
+                <div class="subcard">
+                  <div class="subcard-head">
+                    <span class="subcard-title">Cảnh báo Quản trị Rủi ro Tự động (Risk Guard)</span>
+                  </div>
+                  <div class="bctc-flags-list" id="pf-alerts-list"></div>
+                </div>
+                <div class="subcard">
+                  <div class="subcard-head">
+                    <span class="subcard-title">Cơ cấu Tỷ trọng Ngành Thực tế</span>
+                  </div>
+                  <div class="chart-box chart-sm" id="chart-pf-sectors" style="height:245px"></div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- SECTION C: REALTIME ALERTS (BROWSER + TELEGRAM) & PWA INSTALL -->
+          <section class="section">
+            <div class="section-head">
+              <div>
+                <h2 class="section-title">🔔 Trung tâm Cảnh báo Realtime (Telegram &amp; Trình duyệt) · Cài App iPad/iPhone (PWA)</h2>
+                <p class="section-desc">Nhận cảnh báo trước 15 phút ra tin Mỹ ★★★, cảnh báo danh mục chạm Stop-loss/TP và gửi Bản tin Sáng CIO về Telegram chỉ với 1 chạm</p>
+              </div>
+            </div>
+
+            <div class="pro-alert-grid">
+              <div class="panel">
+                <div class="panel-head compact">
+                  <div>
+                    <h3 class="panel-title">🚀 Gửi Báo cáo &amp; Cảnh báo qua Telegram Bot</h3>
+                    <p class="panel-sub">Bot Token &amp; Chat ID chỉ lưu cục bộ trên trình duyệt của bạn (không lưu trên server)</p>
+                  </div>
+                </div>
+                <div class="tg-form-grid">
+                  <label>Telegram Bot Token (từ @BotFather)
+                    <input type="password" id="tg-bot-token" class="search-input mono" placeholder="123456789:ABCdef..." />
+                  </label>
+                  <label>Telegram Chat ID (từ @userinfobot)
+                    <input type="text" id="tg-chat-id" class="search-input mono" placeholder="VD: 591234567 hoặc -100..." />
+                  </label>
+                </div>
+                <div class="controls-row mt-sm">
+                  <button type="button" class="btn-icon" id="btn-tg-save">Lưu cấu hình</button>
+                  <button type="button" class="btn-icon" id="btn-tg-test">Gửi tin thử</button>
+                  <button type="button" class="btn-primary" id="btn-tg-send-brief">🚀 Gửi Bản tin Sáng ngay</button>
+                </div>
+                <div class="bctc-status-msg hidden mt-sm" id="tg-status-msg"></div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-head compact">
+                  <div>
+                    <h3 class="panel-title">📲 Thông báo Trình duyệt &amp; Cài App PWA</h3>
+                    <p class="panel-sub">Biến VĨ MÔ PULSE thành App toàn màn hình trên iPad, iPhone &amp; Desktop</p>
+                  </div>
+                </div>
+                <div class="alert-checks">
+                  <label class="alert-chk-row"><input type="checkbox" id="chk-alert-cal15" checked /> Nhắc trước 15 phút tin Mỹ ★★★ (CPI, PCE, FOMC, NFP) &amp; báo khi vừa ra số thực tế</label>
+                  <label class="alert-chk-row"><input type="checkbox" id="chk-alert-pf" checked /> Cảnh báo khi cổ phiếu trong Danh mục thủng Ice Wyckoff hoặc chạm vùng Chốt lời BCTC</label>
+                </div>
+                <div class="controls-row mt-sm">
+                  <button type="button" class="btn-primary" id="btn-notif-enable">Bật Thông báo Trình duyệt</button>
+                  <button type="button" class="btn-icon hidden" id="btn-pwa-install">⬇ Cài đặt như App (PWA)</button>
+                </div>
+                <div class="panel-footnote" id="notif-status">—</div>
+                <div class="pwa-guide-box mt-sm">
+                  <strong>Cài trên iPad / iPhone (Safari):</strong> Bấm biểu tượng <strong>Chia sẻ (Share ⬆)</strong> trên thanh Safari → chọn <strong>Thêm vào Màn hình chính (Add to Home Screen)</strong> → mở full-screen không thanh địa chỉ như App Bloomberg!
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
       </main>
 
       <footer class="footer">
         <div class="footer-inner">
           <div>
-            <strong>VĨ MÔ PULSE</strong> · Phím tắt: <code class="mono">1</code>–<code class="mono">7</code> · <code class="mono">0</code> Toàn cảnh · Giờ Việt Nam (UTC+7)
+            <strong>VĨ MÔ PULSE</strong> · Phím tắt: <code class="mono">1</code>–<code class="mono">8</code> · <code class="mono">0</code> Toàn cảnh · Giờ Việt Nam (UTC+7)
           </div>
           <div class="source-pills" id="footer-sources"></div>
         </div>
       </footer>
+    </div>
+  </div>
+
+  <!-- 1-CLICK CIO MORNING BRIEF PRINTABLE MODAL -->
+  <div class="brief-modal-backdrop hidden" id="brief-modal" role="dialog" aria-modal="true" aria-label="Báo cáo Sáng CIO">
+    <div class="brief-modal-dialog">
+      <div class="brief-modal-bar">
+        <strong>📄 Báo cáo Sáng CIO · VĨ MÔ PULSE × BCTC × Wyckoff</strong>
+        <div class="controls-row">
+          <button type="button" class="btn-primary" id="btn-brief-print">🖨️ In / Lưu PDF</button>
+          <button type="button" class="btn-icon" id="btn-brief-copy">Sao chép bản tin</button>
+          <button type="button" class="btn-icon" id="btn-brief-tg">🚀 Gửi Telegram</button>
+          <button type="button" class="btn-icon" id="btn-brief-close">✕ Đóng</button>
+        </div>
+      </div>
+      <div class="bctc-status-msg hidden" id="brief-tg-msg" style="margin:8px 16px 0"></div>
+      <div class="brief-print-sheet" id="brief-print-sheet"></div>
     </div>
   </div>
 </body>

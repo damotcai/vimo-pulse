@@ -69,6 +69,10 @@
     if (typeof window.echarts === "undefined") return null;
     const el = document.getElementById(id);
     if (!el || el.offsetParent === null) return null;
+    if (bState.charts[id] && bState.charts[id].getDom() !== el) {
+      try { bState.charts[id].dispose(); } catch (_) {}
+      delete bState.charts[id];
+    }
     if (!bState.charts[id]) {
       bState.charts[id] = window.echarts.init(el);
     }
