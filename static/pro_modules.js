@@ -163,8 +163,118 @@
     }
   }
 
+  function renderCioDiagnosis(cio) {
+    const panel = $("#cio-vn30-diagnosis-panel");
+    if (!panel) return;
+    if (!cio || !cio.external_us) {
+      panel.innerHTML = `<div class="empty-state">Chưa có dữ liệu chẩn đoán CIO.</div>`;
+      return;
+    }
+    const t = tokens();
+    const toneColor = (tone) => (tone === "emerald" ? t.emerald : tone === "rose" ? t.rose : tone === "amber" ? t.amber : t.accent);
+    const ext = cio.external_us || {};
+    const intr = cio.internal_vn || {};
+    const dist = cio.index_distortion || {};
+    const conv = cio.vn30_conviction || {};
+
+    const renderPickCard = (p, accentCol) => `
+      <div class="cio-pick-card">
+        <div class="cio-pick-head">
+          <div>
+            <span class="cio-pick-sym mono">${esc(p.ticker)}</span>
+            <span style="font-size:11px;color:var(--text-subtle);margin-left:5px">${esc(p.sector_vi)}</span>
+          </div>
+          <span class="mono" style="font-weight:800;font-size:12.5px;color:${accentCol}">${Number(p.triple_score || 0).toFixed(1)}đ</span>
+        </div>
+        <div class="cio-pick-meta mono">
+          <span>Giá <strong>${fmtVnd(p.price)}</strong></span>
+          <span>FV <strong>${fmtVnd(p.fair_value_macro)}</strong> (${fmtSigned(p.upside_pct, 1, "%")})</span>
+          <span>P/E ${p.pe ?? "—"}x · ROE ${p.roe ?? "—"}%</span>
+          ${p.dividend_yield ? `<span>Cổ tức ${Number(p.dividend_yield).toFixed(1)}%</span>` : ""}
+        </div>
+        <div class="cio-pick-thesis">${esc(p.thesis)}</div>
+        <div class="cio-pick-actions">
+          <button type="button" class="btn-open-bctc-mini" data-open-bctc="${esc(p.ticker)}">Mở BCTC</button>
+          <button type="button" class="btn-open-bctc-mini" data-open-wyckoff="${esc(p.ticker)}">Mở Wyckoff</button>
+        </div>
+      </div>`;
+
+    const coreList = conv.core_buy || [];
+    const watchList = conv.accumulate_watch || [];
+    const avoidList = conv.avoid_distortion || [];
+
+    panel.innerHTML = `
+      <div class="cio-diag-head">
+        <div>
+          <div class="cio-diag-eyebrow">GÓC NHÌN CIO · TÁCH BẠCH MỸ (NGOẠI SINH) × NỘI TẠI VN × XANH VỎ ĐỎ LÒNG</div>
+          <h3 class="panel-title" style="margin-top:2px">Chẩn đoán Cấu trúc Thị trường &amp; Tuyển chọn Cổ phiếu VN30 Đáng Đầu tư</h3>
+        </div>
+        <span class="source-tag mono">${esc(cio.updated_at_vn || "")}</span>
+      </div>
+
+      <div class="cio-diag-grid">
+        <div class="cio-diag-card tone-${esc(ext.tone || "amber")}">
+          <div class="cio-diag-top">
+            <span class="cio-diag-eyebrow">1. Ngoại sinh (Mỹ / Toàn cầu)</span>
+            <span class="cio-diag-score mono" style="color:${toneColor(ext.tone)}">${ext.score ?? "—"}/100</span>
+          </div>
+          <div class="cio-diag-title">${esc(ext.label || "")}</div>
+          <div class="cio-diag-desc">Van áp suất định giá &amp; dòng vốn ngoại (CPI Mỹ ${ext.metrics?.us_cpi ?? "—"}% · Core PCE ${ext.metrics?.us_core_pce ?? "—"}% · DXY ${ext.metrics?.dxy ?? "—"}).</div>
+          <div class="cio-diag-tags">${(ext.reasons || []).map((r) => `<span class="cio-diag-tag">${esc(r)}</span>`).join("")}</div>
+        </div>
+
+        <div class="cio-diag-card tone-${esc(intr.tone || "amber")}">
+          <div class="cio-diag-top">
+            <span class="cio-diag-eyebrow">2. Nội tại VN (Thanh khoản · FX)</span>
+            <span class="cio-diag-score mono" style="color:${toneColor(intr.tone)}">${intr.score ?? "—"}/100</span>
+          </div>
+          <div class="cio-diag-title">${esc(intr.label || "")}</div>
+          <div class="cio-diag-desc">Bộ khuếch đại nội địa (LSLNH ON ${intr.metrics?.ib_on ?? "—"}% · Vênh Chợ đen ${intr.metrics?.fx_spread_pct != null ? `+${intr.metrics.fx_spread_pct}%` : "—"} · Ngoại 5p ${fmtSigned(intr.metrics?.foreign_5d_bn, 0, " tỷ")}).</div>
+          <div class="cio-diag-tags">${(intr.reasons || []).map((r) => `<span class="cio-diag-tag">${esc(r)}</span>`).join("")}</div>
+        </div>
+
+        <div class="cio-diag-card tone-${esc(dist.tone || "amber")}">
+          <div class="cio-diag-top">
+            <span class="cio-diag-eyebrow">3. Radar Xanh vỏ Đỏ lòng</span>
+            <span class="cio-diag-score mono" style="color:${toneColor(dist.tone)}">${dist.vn30_markdown_cnt ?? "—"}/${dist.vn30_total ?? 30} Đè giá</span>
+          </div>
+          <div class="cio-diag-title" style="color:${toneColor(dist.tone)}">${esc(dist.label || "")}</div>
+          <div class="cio-diag-desc">${esc(dist.detail || "")}</div>
+        </div>
+      </div>
+
+      <div class="cio-verdict-bar">${esc(cio.transmission_verdict || "")}</div>
+
+      <div class="cio-picks-grid">
+        <div class="cio-bucket-col">
+          <div class="cio-bucket-head" style="color:${t.emerald}">
+            <span>💎 Ưu tiên Đầu tư VN30 (Đủ 3 Trụ)</span>
+            <span class="mono">${coreList.length} mã</span>
+          </div>
+          ${coreList.length ? coreList.map((p) => renderPickCard(p, t.emerald)).join("") : `<div class="empty-state">Chưa có mã VN30 đạt chuẩn Kim cương ở kịch bản này.</div>`}
+        </div>
+
+        <div class="cio-bucket-col">
+          <div class="cio-bucket-head" style="color:${t.accent}">
+            <span>🎯 Canh Gom / Chờ Spring Đáy VN30</span>
+            <span class="mono">${watchList.length} mã</span>
+          </div>
+          ${watchList.length ? watchList.map((p) => renderPickCard(p, t.accent)).join("") : `<div class="empty-state">Không có mã canh gom phù hợp.</div>`}
+        </div>
+
+        <div class="cio-bucket-col">
+          <div class="cio-bucket-head" style="color:${t.rose}">
+            <span>🛑 Tránh Đu đỉnh / Kéo Trụ Ảo</span>
+            <span class="mono">${avoidList.length} mã</span>
+          </div>
+          ${avoidList.length ? avoidList.map((p) => renderPickCard(p, t.rose)).join("") : `<div class="empty-state">Không phát hiện mã VN30 kéo trụ quá nóng.</div>`}
+        </div>
+      </div>`;
+  }
+
   function renderFusionMatrix(data) {
     if (!data) return;
+    renderCioDiagnosis(data.cio_diagnosis);
     const t = tokens();
     const mc = data.macro_context || {};
     const c = data.counts || {};

@@ -2258,10 +2258,122 @@ body.modal-open { overflow: hidden; }
   color: var(--text);
 }
 
+/* CIO Market Diagnosis & VN30 Conviction Picks (v10) */
+.cio-diag-panel { border-color: var(--accent-border); }
+.cio-diag-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.cio-diag-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.cio-diag-card {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cio-diag-card.tone-rose { border-color: rgba(244, 63, 94, 0.45); }
+.cio-diag-card.tone-amber { border-color: rgba(245, 158, 11, 0.45); }
+.cio-diag-card.tone-emerald { border-color: rgba(16, 185, 129, 0.45); }
+.cio-diag-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.cio-diag-eyebrow {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.cio-diag-score { font-size: 20px; font-weight: 800; }
+.cio-diag-title { font-size: 13px; font-weight: 800; color: var(--text); }
+.cio-diag-desc { font-size: 12px; line-height: 1.5; color: var(--text-muted); }
+.cio-diag-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
+.cio-diag-tag {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.cio-verdict-bar {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.cio-picks-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.cio-bucket-col {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cio-bucket-head {
+  font-size: 12.5px;
+  font-weight: 800;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.cio-pick-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.cio-pick-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+.cio-pick-sym { font-size: 14px; font-weight: 800; color: var(--text); }
+.cio-pick-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.cio-pick-thesis { font-size: 11.8px; line-height: 1.48; color: var(--text); }
+.cio-pick-actions { display: flex; gap: 6px; margin-top: 2px; }
+
 @media (max-width: 1020px) {
   .pf-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pf-form-grid button { grid-column: 1 / -1; }
-  .pro-alert-grid, .tg-form-grid, .brief-doc-grid { grid-template-columns: 1fr; }
+  .pro-alert-grid, .tg-form-grid, .brief-doc-grid, .cio-diag-grid, .cio-picks-grid { grid-template-columns: 1fr; }
   .vn-ib-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .vn-fxtier-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

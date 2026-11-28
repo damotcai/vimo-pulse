@@ -1,5 +1,5 @@
-/* VĨ MÔ PULSE Service Worker (v9) — Network-First Shell Cache, Live APIs Never Stale */
-const CACHE_NAME = "vimo-pulse-shell-v9";
+/* VĨ MÔ PULSE Service Worker (v10) — Network-First Shell Cache, Live APIs Never Stale */
+const CACHE_NAME = "vimo-pulse-shell-v10";
 const SHELL_ASSETS = [
   "/",
   "/manifest.json",

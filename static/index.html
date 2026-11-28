@@ -14,12 +14,12 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=9" />
+  <link rel="stylesheet" href="/static/styles.css?v=10" />
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js" defer></script>
-  <script src="/static/bctc_module.js?v=9" defer></script>
-  <script src="/static/wyckoff_module.js?v=9" defer></script>
-  <script src="/static/pro_modules.js?v=9" defer></script>
-  <script src="/static/app.js?v=9" defer></script>
+  <script src="/static/bctc_module.js?v=10" defer></script>
+  <script src="/static/wyckoff_module.js?v=10" defer></script>
+  <script src="/static/pro_modules.js?v=10" defer></script>
+  <script src="/static/app.js?v=10" defer></script>
 </head>
 <body>
   <div class="app-shell" id="app-shell">
@@ -1811,7 +1811,13 @@
             </div>
 
             <div class="bctc-status-msg hidden" id="fusion-status-msg"></div>
-            <div class="bctc-kpi-strip" id="fusion-kpi-strip"></div>
+
+            <!-- CIO MARKET DIAGNOSIS: US EXTERNAL vs VN INTERNAL + INDEX DISTORTION + VN30 CONVICTION PICKS -->
+            <div class="panel cio-diag-panel mt-sm" id="cio-vn30-diagnosis-panel">
+              <div class="empty-state">Đang chẩn đoán Vĩ mô Mỹ vs Nội tại VN, Radar Xanh vỏ Đỏ lòng &amp; Tuyển chọn Cổ phiếu VN30 đáng đầu tư...</div>
+            </div>
+
+            <div class="bctc-kpi-strip mt-sm" id="fusion-kpi-strip"></div>
             <div class="bctc-summary-callout mt-sm" id="fusion-summary">Đang hợp nhất 3 trụ cột Vĩ mô × BCTC × Wyckoff...</div>
 
             <div class="grid-2-rates mt-sm">
