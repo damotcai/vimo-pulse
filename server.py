@@ -29,6 +29,7 @@ from bctc_macro_engine import (
     scrape_company,
     scrape_universe,
 )
+from db_store import macro_db
 from macro_fetcher import build_dashboard, fetch_calendar_fast, fetch_watchlist_stocks, get_cached_dashboard
 from wyckoff_engine import analyze_symbol_wyckoff, build_wyckoff_radar
 from fusion_engine import (
@@ -88,25 +89,37 @@ def _is_fresh_snapshot(payload: dict | None, max_age: float = FAST_MAX_AGE_SECON
     return (time.time() - float(ts)) <= max_age
 
 
-def get_dashboard_payload(mode: str = "live", force: bool = False) -> dict:
+def get_dashboard_payload(mode: str = "smart", force: bool = False, user_check: bool = False) -> dict:
     global _latest_payload, _last_live_ts
 
-    # Fast mode: only serve in-memory or disk-cached snapshot if it is genuinely FRESH (<= 4h)
-    if mode == "fast" and not force:
-        if _is_fresh_snapshot(_latest_payload):
+    # Instant DB / Fast mode: serve verified SQLite or memory snapshot immediately (<30ms) if <= 12h old
+    if mode in ("db", "fast") and not force:
+        if _is_fresh_snapshot(_latest_payload, max_age=12 * 3600):
             return {**_latest_payload, "_cached_fast": True}
         disk = get_cached_dashboard()
-        if _is_fresh_snapshot(disk):
-            _latest_payload = disk
+        if _is_fresh_snapshot(disk, max_age=12 * 3600):
+            with _refresh_lock:
+                _latest_payload = disk
             return {**disk, "_cached_fast": True}
+        if mode == "db":
+            # Assemble directly from whatever valid sources are already stored in SQLite (0 network calls)
+            snap = build_dashboard(force=False, mode="db", user_check=False)
+            if (snap.get("meta") or {}).get("db_stats", {}).get("sources_count", 0) > 0:
+                return {**snap, "_cached_fast": True}
         return {"_stale_skipped": True, "_cached_fast": True}
 
     with _refresh_lock:
         now = time.time()
-        # Coalesce duplicate live calls within 15 seconds unless force=True
-        if not force and _is_fresh_snapshot(_latest_payload, max_age=180) and (now - _last_live_ts) < 15:
+        # Coalesce duplicate rapid calls within 10 seconds unless force=True or explicit user_check
+        if (
+            not force
+            and not user_check
+            and _is_fresh_snapshot(_latest_payload, max_age=180)
+            and not ((_latest_payload or {}).get("meta") or {}).get("degraded")
+            and (now - _last_live_ts) < 10
+        ):
             return {**_latest_payload, "_cached_fast": False}
-        data = build_dashboard(force=force)
+        data = build_dashboard(force=force, mode="smart", user_check=user_check)
         _latest_payload = data
         _last_live_ts = time.time()
         return {**data, "_cached_fast": False}
@@ -304,7 +317,11 @@ class MacroHandler(BaseHTTPRequestHandler):
         qs = parse_qs(parsed.query)
 
         if path == "/api/health":
-            self._send_json({"status": "ok", "ts": time.time()})
+            self._send_json({"status": "ok", "ts": time.time(), "db": macro_db.get_db_stats()})
+            return
+
+        if path == "/api/db/status":
+            self._send_json(macro_db.get_db_stats())
             return
 
         if path == "/api/calendar":
@@ -338,10 +355,13 @@ class MacroHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/dashboard":
-            mode = (qs.get("mode", ["live"])[0] or "live").lower()
+            mode = (qs.get("mode", ["smart"])[0] or "smart").lower()
+            if mode not in ("db", "fast", "smart", "live"):
+                mode = "smart"
             force = qs.get("force", ["0"])[0] in ("1", "true", "yes")
+            user_check = qs.get("check", ["0"])[0] in ("1", "true", "yes")
             try:
-                payload = get_dashboard_payload(mode=mode, force=force)
+                payload = get_dashboard_payload(mode=mode, force=force, user_check=user_check)
                 self._send_json(payload)
             except Exception as exc:
                 self._send_internal_error("GET /api/dashboard", exc)

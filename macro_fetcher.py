@@ -27,6 +27,7 @@ from typing import Any
 
 import requests
 
+from db_store import macro_db
 from security_utils import atomic_write_json, build_pooled_session, get_logger
 
 logger = get_logger("macro_fetcher")
@@ -51,28 +52,32 @@ HEADERS = {
     "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
-# Per-source cache TTLs (seconds) to guarantee live updates while respecting upstream rate limits
+# Per-source cache TTLs (seconds) — slow official releases stay in SQLite DB for hours,
+# while intraday markets/calendar check frequently and merge incrementally.
 SOURCE_TTL = {
-    "bls": 1800,          # Monthly official US CPI/PPI/Unemp/NFP (BLS v1 daily quota safe)
-    "bea": 1800,          # Monthly official US PCE/Core PCE (DBnomics BEA)
-    "nyfed": 600,         # Daily EFFR & SOFR
-    "yield_curve": 600,   # Daily Federal Reserve H.15 Treasury curve
+    "bls": 6 * 3600,      # Monthly official US CPI/Core CPI/PPI/Unemp/NFP (BLS + FRED mirror)
+    "bea": 6 * 3600,      # Monthly official US PCE/Core PCE (BEA DBnomics + FRED mirror)
+    "nyfed": 1800,        # Daily EFFR & SOFR
+    "yield_curve": 1800,  # Daily Federal Reserve H.15 Treasury curve
     "fedwatch": 180,      # Live CBOT 30-Day Fed Funds Futures (ZQ)
     "fx_markets": 120,    # Live USD/VND, DXY, Gold, Oil, S&P500, VIX
     "vn_market": 120,     # Live VN-Index, VN30, HNX, UPCoM, 8 HOSE Sectors & Foreign/Prop Flow
     "vn_valuation": 300,  # Live VN-Index P/E & 8 Sector Representative Bellwether Stocks
     "gold_vn": 180,       # Live SJC Bar, SJC Ring 9999 vs World Gold Converted Spread
-    "vn_money_fx": 300,   # Live VN Interbank Rates (ON/1W/2W), SBV Policy/Deposit & 3-Tier FX (Central/Bank/Free)
+    "vn_money_fx": 300,   # Live VN Interbank Rates (ON/1W/2W), SBV Policy/Deposit & 3-Tier FX
     "vcb": 310,           # Vietcombank XML explicitly asks <= 1 req per 5 min
-    "sbv": 600,           # Optional SBV portal (short timeout, skipped cleanly if unavailable)
-    "worldbank": 3600,    # Annual VN vs US comparison
-    "pmi_live": 900,      # PMI & VN CPI baseline + live RSS/S&P Global updates
-    "calendar": 30,       # Live US 3-Star Economic Calendar (TradingView + FXStreet real-time)
+    "sbv": 1800,          # Optional SBV portal (short timeout, skipped cleanly if unavailable)
+    "worldbank": 86400,   # Annual VN vs US comparison
+    "pmi_live": 7200,     # Monthly PMI & VN CPI baseline + live RSS/S&P Global updates
+    "calendar": 45,       # Live US 3-Star Economic Calendar (TradingView + FXStreet real-time)
     "news": 300,          # Vietnam macro & SBV policy RSS feeds
 }
 
+SLOW_MONTHLY_SOURCES = {"bls", "bea", "worldbank", "pmi_live"}
+
 _cache_lock = threading.Lock()
 _source_cache: dict[str, dict[str, Any]] = {}
+_db_bootstrapped = False
 
 
 def _load_json(path: Path, default: Any) -> Any:
@@ -91,50 +96,291 @@ def _save_json(path: Path, data: Any) -> None:
         logger.warning("Failed to write JSON %s: %s", path.name, exc)
 
 
+def _is_valid_source_data(key: str, data: Any) -> bool:
+    """Strictly verify upstream payload has real data so empty/rate-limited responses NEVER wipe SQLite DB."""
+    if data is None:
+        return False
+    if key == "bls":
+        return (
+            isinstance(data, dict)
+            and len(data.get("cpi") or []) >= 12
+            and len(data.get("core_cpi") or []) >= 12
+            and len(data.get("unemployment") or []) >= 12
+        )
+    if key == "bea":
+        return (
+            isinstance(data, dict)
+            and len(data.get("pce") or []) >= 12
+            and len(data.get("core_pce") or []) >= 12
+        )
+    if key == "nyfed":
+        return isinstance(data, dict) and bool((data.get("latest") or {}).get("effr"))
+    if key == "yield_curve":
+        return isinstance(data, dict) and bool(data.get("latest"))
+    if key == "fedwatch":
+        return isinstance(data, dict) and bool(data.get("contracts"))
+    if key == "fx_markets":
+        return isinstance(data, dict) and bool(data.get("tickers"))
+    if key == "vn_market":
+        if not isinstance(data, dict):
+            return False
+        vni = (data.get("indices") or {}).get("VNINDEX") or {}
+        return len(vni.get("series") or []) >= 20
+    if key == "vn_valuation":
+        return isinstance(data, dict) and bool((data.get("vnindex_pe") or {}).get("available"))
+    if key == "gold_vn":
+        return isinstance(data, dict) and bool(data.get("available"))
+    if key == "vn_money_fx":
+        if not isinstance(data, dict):
+            return False
+        return bool((data.get("interbank") or {}).get("available") or (data.get("fx_tiers") or {}).get("available"))
+    if key == "vcb":
+        return isinstance(data, dict) and bool((data.get("usd") or {}).get("sell"))
+    if key == "sbv":
+        return isinstance(data, dict) and bool(data.get("available"))
+    if key == "worldbank":
+        return isinstance(data, dict) and bool(data.get("metrics") or data.get("years") or data.get("vn"))
+    if key == "pmi_live":
+        return isinstance(data, dict) and bool(data.get("vn_mfg_pmi") or data.get("us_ism_mfg"))
+    if key == "calendar":
+        return isinstance(data, dict) and isinstance(data.get("events"), list)
+    if key == "news":
+        return isinstance(data, list) and len(data) > 0
+    return bool(data)
+
+
+def _extract_source_meta(key: str, data: Any) -> tuple[str | None, int]:
+    """Extract (latest_date, record_count) for SQLite tracking & smart sync reporting."""
+    if not data:
+        return None, 0
+    try:
+        if key == "bls":
+            cpi = data.get("cpi") or []
+            cnt = sum(len(data.get(k) or []) for k in ("cpi", "core_cpi", "ppi", "unemployment", "nfp"))
+            return (cpi[-1].get("date") if cpi else None), cnt
+        if key == "bea":
+            cpce = data.get("core_pce") or []
+            cnt = len(data.get("pce") or []) + len(cpce)
+            return (cpce[-1].get("date") if cpce else None), cnt
+        if key == "nyfed":
+            return (data.get("latest") or {}).get("date"), len(data.get("monthly") or [])
+        if key == "yield_curve":
+            return (data.get("latest") or {}).get("date"), len(data.get("spread_history") or [])
+        if key == "vn_market":
+            vni = ((data.get("indices") or {}).get("VNINDEX") or {})
+            ser = vni.get("series") or []
+            return (ser[-1].get("date") if ser else None), len(ser)
+        if key == "vn_money_fx":
+            ib = (data.get("interbank") or {}).get("series") or []
+            fx = (data.get("fx_tiers") or {}).get("series") or []
+            dt = (fx[-1].get("date") if fx else None) or (ib[-1].get("date") if ib else None)
+            return dt, len(ib) + len(fx)
+        if key == "pmi_live":
+            vp = data.get("vn_mfg_pmi") or []
+            return (vp[-1].get("date") if vp else None), len(vp) + len(data.get("us_ism_mfg") or [])
+        if key == "calendar":
+            ev = data.get("events") or []
+            return (ev[-1].get("date_ymd") if ev else None), len(ev)
+        if key == "news":
+            return (data[0].get("published_vn") if data else None), len(data)
+        if key == "fx_markets":
+            hist = data.get("fx_dual_history") or []
+            return (hist[-1].get("date") if hist else None), len(hist) + len(data.get("tickers") or [])
+    except Exception:
+        pass
+    return None, 1
+
+
+def _merge_incremental_source(key: str, data: Any) -> tuple[Any, int]:
+    """
+    Incrementally upsert time-series points into SQLite `series_points` by date so:
+      - New dates are appended cleanly.
+      - Historical dates NEVER vanish if an upstream API only sends a partial window.
+    Returns (merged_data, newly_added_or_updated_points).
+    """
+    new_pts = 0
+    if not isinstance(data, dict):
+        return data, 0
+    try:
+        if key == "bls":
+            merged = dict(data)
+            for field in ("cpi", "core_cpi", "ppi", "unemployment", "nfp"):
+                pts = data.get(field) or []
+                if pts:
+                    m_pts, n = macro_db.upsert_series_points(f"bls:{field}", pts, date_key="date")
+                    merged[field] = m_pts
+                    new_pts += n
+            return merged, new_pts
+        if key == "bea":
+            merged = dict(data)
+            for field in ("pce", "core_pce"):
+                pts = data.get(field) or []
+                if pts:
+                    m_pts, n = macro_db.upsert_series_points(f"bea:{field}", pts, date_key="date")
+                    merged[field] = m_pts
+                    new_pts += n
+            return merged, new_pts
+        if key == "pmi_live":
+            merged = dict(data)
+            for field in ("us_ism_mfg", "us_ism_svc", "vn_mfg_pmi"):
+                pts = data.get(field) or []
+                if pts:
+                    m_pts, n = macro_db.upsert_series_points(f"pmi:{field}", pts, date_key="date")
+                    merged[field] = m_pts
+                    new_pts += n
+            return merged, new_pts
+        if key == "vn_money_fx":
+            merged = dict(data)
+            for sub, s_key in (("interbank", "vnmfx:interbank"), ("fx_tiers", "vnmfx:fx_tiers")):
+                sub_obj = dict(data.get(sub) or {})
+                pts = sub_obj.get("series") or []
+                if pts:
+                    m_pts, n = macro_db.upsert_series_points(s_key, pts, date_key="date")
+                    sub_obj["series"] = m_pts
+                    merged[sub] = sub_obj
+                    new_pts += n
+            return merged, new_pts
+        if key == "vn_market":
+            merged = dict(data)
+            indices = dict(data.get("indices") or {})
+            for code in ("VNINDEX", "VN30", "HNX", "UPCOM"):
+                idx_obj = indices.get(code)
+                if isinstance(idx_obj, dict) and idx_obj.get("series"):
+                    idx_copy = dict(idx_obj)
+                    m_pts, n = macro_db.upsert_series_points(f"vnidx:{code}", idx_obj["series"], date_key="date")
+                    idx_copy["series"] = m_pts
+                    indices[code] = idx_copy
+                    new_pts += n
+            merged["indices"] = indices
+            return merged, new_pts
+    except Exception as exc:
+        logger.warning("Incremental SQLite merge failed for '%s': %s", key, exc)
+    return data, 0
+
+
 def _init_source_cache() -> None:
-    global _source_cache
+    """Hydrate in-memory cache from SQLite DB (and migrate legacy source_cache.json if present)."""
+    global _source_cache, _db_bootstrapped
     with _cache_lock:
-        if not _source_cache:
+        if _db_bootstrapped:
+            return
+        db_snaps = macro_db.get_all_source_snapshots()
+        if db_snaps:
+            _source_cache.update(db_snaps)
+        else:
+            # One-time migration from legacy JSON file if SQLite is brand new
             loaded = _load_json(SOURCE_CACHE_FILE, {})
             if isinstance(loaded, dict):
                 now = time.time()
-                # Discard entries older than 24 hours on boot so stale snapshots never pollute live startups
-                _source_cache = {
-                    k: v
-                    for k, v in loaded.items()
-                    if isinstance(v, dict) and (now - float(v.get("ts") or 0)) < 86400
-                }
+                for k, v in loaded.items():
+                    if isinstance(v, dict) and _is_valid_source_data(k, v.get("data")):
+                        ts = float(v.get("ts") or 0)
+                        if (now - ts) < 7 * 86400:
+                            dt, cnt = _extract_source_meta(k, v["data"])
+                            macro_db.save_source_snapshot(k, v["data"], latest_date=dt, record_count=cnt, fetched_at=ts)
+                            _source_cache[k] = {"ts": ts, "data": v["data"], "latest_date": dt, "record_count": cnt}
+        _db_bootstrapped = True
 
 
-def _get_cached_or_fetch(key: str, fn, force: bool = False, respect_strict_cooldown: bool = False):
-    """Fetch source with per-source TTL caching & automatic fallback to last valid cached value."""
+def _get_cached_or_fetch_smart(
+    key: str,
+    fn,
+    mode: str = "smart",
+    force: bool = False,
+    respect_strict_cooldown: bool = False,
+    user_check: bool = False,
+) -> tuple[Any, dict[str, Any]]:
+    """
+    Smart per-source fetcher backed by SQLite WAL database:
+      1. Inspects each source in DB individually.
+      2. Missing/invalid source -> ALWAYS fetches & repairs immediately.
+      3. Valid & fresh in DB -> Serves directly from SQLite (0 network calls).
+      4. Expired (or user-triggered smart check for live market feeds) -> Fetches & merges ONLY new data.
+      5. Upstream failure or empty response -> NEVER overwrites valid SQLite data!
+    """
     _init_source_cache()
     now = time.time()
     ttl = SOURCE_TTL.get(key, 300)
 
     with _cache_lock:
         entry = _source_cache.get(key)
+    if entry is None:
+        entry = macro_db.get_source_snapshot(key)
+        if entry is not None:
+            with _cache_lock:
+                _source_cache[key] = entry
 
-    if entry is not None:
-        age = now - entry.get("ts", 0)
-        if respect_strict_cooldown and age < 305 and entry.get("data"):
-            return entry["data"], False
-        if not force and age < ttl and entry.get("data") is not None:
-            return entry["data"], False
+    has_valid = entry is not None and _is_valid_source_data(key, entry.get("data"))
+    age = (now - float(entry.get("ts") or 0)) if entry else 1e12
+
+    # Pure DB read mode (instant paint on page open)
+    if mode == "db":
+        if has_valid:
+            return entry["data"], {"ok": True, "fresh": False, "action": "db_cached", "new_points": 0, "age_sec": round(age, 1)}
+        return None, {"ok": False, "fresh": False, "action": "missing", "new_points": 0}
+
+    # Decide per-source whether to hit upstream network
+    should_fetch = False
+    if not has_valid:
+        should_fetch = True  # Auto-repair missing/broken source (e.g. blank Core CPI)
+    elif respect_strict_cooldown and age < 305:
+        should_fetch = False
+    elif force:
+        should_fetch = True
+    elif user_check:
+        # User clicked "Cập nhật": keep valid slow monthly feeds (< TTL) in DB, check intraday/daily feeds (>= 25s)
+        if key in SLOW_MONTHLY_SOURCES:
+            should_fetch = age >= ttl
+        else:
+            should_fetch = age >= 25
+    else:
+        should_fetch = age >= ttl
+
+    if not should_fetch and has_valid:
+        return entry["data"], {"ok": True, "fresh": False, "action": "db_cached", "new_points": 0, "age_sec": round(age, 1)}
 
     try:
         fresh = fn()
-        if fresh is not None:
+        if _is_valid_source_data(key, fresh):
+            merged, new_pts = _merge_incremental_source(key, fresh)
+            latest_dt, rec_cnt = _extract_source_meta(key, merged)
+            save_info = macro_db.save_source_snapshot(key, merged, latest_date=latest_dt, record_count=rec_cnt, fetched_at=now)
             with _cache_lock:
-                _source_cache[key] = {"ts": now, "data": fresh}
-                _save_json(SOURCE_CACHE_FILE, _source_cache)
-            return fresh, True
+                _source_cache[key] = {
+                    "ts": now,
+                    "data": merged,
+                    "latest_date": latest_dt,
+                    "record_count": rec_cnt,
+                }
+            action = "repaired" if not has_valid else ("updated" if (save_info["changed"] or new_pts > 0) else "checked_unchanged")
+            return merged, {
+                "ok": True,
+                "fresh": True,
+                "action": action,
+                "new_points": max(new_pts, save_info.get("added_delta", 0)),
+                "latest_date": latest_dt,
+                "age_sec": 0.0,
+            }
+        logger.warning("Upstream source '%s' returned empty/incomplete payload — preserving SQLite DB copy.", key)
     except Exception as exc:
-        logger.warning("Upstream source '%s' fetch failed: %s", key, exc)
+        logger.warning("Upstream source '%s' fetch failed (%s) — preserving SQLite DB copy.", key, exc)
 
-    if entry and entry.get("data") is not None:
-        return entry["data"], False
-    return None, False
+    if has_valid:
+        return entry["data"], {"ok": True, "fresh": False, "action": "db_preserved_on_err", "new_points": 0, "age_sec": round(age, 1)}
+    return None, {"ok": False, "fresh": False, "action": "failed", "new_points": 0}
+
+
+def _get_cached_or_fetch(key: str, fn, force: bool = False, respect_strict_cooldown: bool = False):
+    """Backward-compatible wrapper around SQLite smart fetcher."""
+    data, meta = _get_cached_or_fetch_smart(
+        key,
+        fn,
+        mode="smart",
+        force=force,
+        respect_strict_cooldown=respect_strict_cooldown,
+        user_check=False,
+    )
+    return data, bool(meta.get("fresh"))
 
 
 def _now_vn() -> datetime:
@@ -322,8 +568,71 @@ def _compute_daily_ytd_comparison(daily_series: list[dict[str, Any]], val_key: s
 
 
 # =============================================================================
-# 1. US BLS Official API (CPI, Core CPI, PPI, Unemployment Rate, Nonfarm Payrolls)
+# 1. US BLS Official API + St. Louis Fed FRED CSV Failover (Zero Quota Limit!)
 # =============================================================================
+
+def _fetch_fred_monthly_series(series_id: str, min_year: int = 2016) -> list[dict[str, Any]]:
+    """Fetch official monthly US macro series from St. Louis Fed FRED public CSV (no API key, no daily IP quota)."""
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+    resp = _HTTP.get(url, headers=HEADERS, timeout=12)
+    resp.raise_for_status()
+    pts: list[dict[str, Any]] = []
+    min_prefix = f"{min_year:04d}-01"
+    for line in resp.text.splitlines()[1:]:
+        parts = line.split(",")
+        if len(parts) < 2:
+            continue
+        dt_raw = parts[0].strip()
+        if len(dt_raw) < 7:
+            continue
+        dt = dt_raw[:7]
+        if dt < min_prefix:
+            continue
+        val = _safe_float(parts[1])
+        if val is not None:
+            pts.append({"date": dt, "index": val})
+    pts.sort(key=lambda x: x["date"])
+    return pts
+
+
+def _fetch_bls_via_fred(start_year: int) -> dict[str, Any]:
+    """Failover mirror using FRED official BLS series: CPIAUCSL, CPILFESL, PPIFIS, UNRATE, PAYEMS."""
+    fred_map = {
+        "cpi": "CPIAUCSL",
+        "core_cpi": "CPILFESL",
+        "ppi": "PPIFIS",
+        "unemp": "UNRATE",
+        "nfp": "PAYEMS",
+    }
+    raw: dict[str, list[dict[str, Any]]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+        futs = {ex.submit(_fetch_fred_monthly_series, sid, start_year): name for name, sid in fred_map.items()}
+        for fut in concurrent.futures.as_completed(futs):
+            name = futs[fut]
+            try:
+                raw[name] = fut.result()
+            except Exception as exc:
+                logger.warning("FRED mirror '%s' failed: %s", name, exc)
+                raw[name] = []
+
+    cpi = _compute_yoy_mom(raw.get("cpi", []))
+    core_cpi = _compute_yoy_mom(raw.get("core_cpi", []))
+    ppi = _compute_yoy_mom(raw.get("ppi", []))
+    unemp = [{"date": p["date"], "value": round(p["index"], 1)} for p in raw.get("unemp", [])]
+    nfp_raw = raw.get("nfp", [])
+    nfp = [
+        {"date": nfp_raw[i]["date"], "total": nfp_raw[i]["index"], "change_k": round(nfp_raw[i]["index"] - nfp_raw[i - 1]["index"], 1)}
+        for i in range(1, len(nfp_raw))
+    ]
+    return {
+        "source": "U.S. Bureau of Labor Statistics (qua FRED Official Mirror)",
+        "cpi": cpi,
+        "core_cpi": core_cpi,
+        "ppi": ppi,
+        "unemployment": unemp,
+        "nfp": nfp,
+    }
+
 
 def fetch_bls_data() -> dict[str, Any]:
     cur_year = _now_vn().year
@@ -335,73 +644,94 @@ def fetch_bls_data() -> dict[str, Any]:
         "LNS14000000",
         "CES0000000001",
     ]
-    resp = requests.post(
-        "https://api.bls.gov/publicAPI/v1/timeseries/data/",
-        json={"seriesid": series_ids, "startyear": str(start_year), "endyear": str(cur_year)},
-        headers={"Content-Type": "application/json", **HEADERS},
-        timeout=15,
-    )
-    resp.raise_for_status()
-    payload = resp.json()
-    if payload.get("status") != "REQUEST_SUCCEEDED":
-        raise RuntimeError(f"BLS API status: {payload.get('status')}")
+    try:
+        resp = _HTTP.post(
+            "https://api.bls.gov/publicAPI/v1/timeseries/data/",
+            json={"seriesid": series_ids, "startyear": str(start_year), "endyear": str(cur_year)},
+            headers={"Content-Type": "application/json", **HEADERS},
+            timeout=9,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        if payload.get("status") == "REQUEST_SUCCEEDED":
+            raw: dict[str, list[dict[str, Any]]] = {}
+            for s in payload.get("Results", {}).get("series", []):
+                sid = s["seriesID"]
+                pts = []
+                for item in s.get("data", []):
+                    period = item.get("period", "")
+                    if not period.startswith("M") or period == "M13":
+                        continue
+                    val = _safe_float(item.get("value"))
+                    if val is None:
+                        continue
+                    dt = f"{item['year']}-{period[1:]:0>2}"
+                    pts.append({"date": dt, "index": val})
+                pts.sort(key=lambda x: x["date"])
+                raw[sid] = pts
 
-    raw: dict[str, list[dict[str, Any]]] = {}
-    for s in payload.get("Results", {}).get("series", []):
-        sid = s["seriesID"]
-        pts = []
-        for item in s.get("data", []):
-            period = item.get("period", "")
-            if not period.startswith("M") or period == "M13":
-                continue
-            val = _safe_float(item.get("value"))
-            if val is None:
-                continue
-            dt = f"{item['year']}-{period[1:]:0>2}"
-            pts.append({"date": dt, "index": val})
-        pts.sort(key=lambda x: x["date"])
-        raw[sid] = pts
+            cpi = _compute_yoy_mom(raw.get("CUSR0000SA0", []))
+            core_cpi = _compute_yoy_mom(raw.get("CUSR0000SA0L1E", []))
+            ppi = _compute_yoy_mom(raw.get("WPSFD4", []))
+            unemp = [{"date": p["date"], "value": round(p["index"], 1)} for p in raw.get("LNS14000000", [])]
+            nfp_raw = raw.get("CES0000000001", [])
+            nfp = [
+                {"date": nfp_raw[i]["date"], "total": nfp_raw[i]["index"], "change_k": round(nfp_raw[i]["index"] - nfp_raw[i - 1]["index"], 1)}
+                for i in range(1, len(nfp_raw))
+            ]
+            res = {
+                "source": "U.S. Bureau of Labor Statistics (BLS)",
+                "cpi": cpi,
+                "core_cpi": core_cpi,
+                "ppi": ppi,
+                "unemployment": unemp,
+                "nfp": nfp,
+            }
+            if _is_valid_source_data("bls", res):
+                return res
+        logger.warning("BLS v1 API returned status=%s — falling back to FRED official mirror.", payload.get("status"))
+    except Exception as exc:
+        logger.warning("BLS v1 API failed (%s) — falling back to FRED official mirror.", type(exc).__name__)
 
-    cpi = _compute_yoy_mom(raw.get("CUSR0000SA0", []))
-    core_cpi = _compute_yoy_mom(raw.get("CUSR0000SA0L1E", []))
-    ppi = _compute_yoy_mom(raw.get("WPSFD4", []))
-    unemp = [{"date": p["date"], "value": round(p["index"], 1)} for p in raw.get("LNS14000000", [])]
-
-    nfp_raw = raw.get("CES0000000001", [])
-    nfp = []
-    for i in range(1, len(nfp_raw)):
-        chg = round(nfp_raw[i]["index"] - nfp_raw[i - 1]["index"], 1)
-        nfp.append({"date": nfp_raw[i]["date"], "total": nfp_raw[i]["index"], "change_k": chg})
-
-    return {
-        "source": "U.S. Bureau of Labor Statistics (BLS)",
-        "cpi": cpi,
-        "core_cpi": core_cpi,
-        "ppi": ppi,
-        "unemployment": unemp,
-        "nfp": nfp,
-    }
+    fred_res = _fetch_bls_via_fred(start_year)
+    if not _is_valid_source_data("bls", fred_res):
+        raise RuntimeError("Cả BLS API và FRED mirror đều tạm gián đoạn.")
+    return fred_res
 
 
 # =============================================================================
-# 2. US BEA Official PCE & Core PCE via DBnomics
+# 2. US BEA Official PCE & Core PCE (DBnomics + FRED Official Failover)
 # =============================================================================
 
 def fetch_bea_pce_data() -> dict[str, Any]:
     out = {"source": "U.S. Bureau of Economic Analysis (BEA / DBnomics)", "pce": [], "core_pce": []}
-    for field, code in [("pce", "DPCERG-M"), ("core_pce", "DPCCRG-M")]:
-        url = f"https://api.db.nomics.world/v22/series/BEA/NIPA-T20804/{code}?observations=1"
-        r = requests.get(url, headers=HEADERS, timeout=12)
-        r.raise_for_status()
-        doc = r.json()["series"]["docs"][0]
-        periods = doc.get("period", [])
-        values = doc.get("value", [])
-        pts = []
-        for p, v in zip(periods, values):
-            if p >= "2016-01" and isinstance(v, (int, float)):
-                pts.append({"date": p, "index": float(v)})
-        pts.sort(key=lambda x: x["date"])
+    for field, code, fred_id in [("pce", "DPCERG-M", "PCEPI"), ("core_pce", "DPCCRG-M", "PCEPILFE")]:
+        pts: list[dict[str, Any]] = []
+        try:
+            url = f"https://api.db.nomics.world/v22/series/BEA/NIPA-T20804/{code}?observations=1"
+            r = _HTTP.get(url, headers=HEADERS, timeout=9)
+            r.raise_for_status()
+            doc = r.json()["series"]["docs"][0]
+            periods = doc.get("period", [])
+            values = doc.get("value", [])
+            for p, v in zip(periods, values):
+                if p >= "2016-01" and isinstance(v, (int, float)):
+                    pts.append({"date": p, "index": float(v)})
+            pts.sort(key=lambda x: x["date"])
+        except Exception as exc:
+            logger.warning("DBnomics BEA '%s' failed (%s) — falling back to FRED %s.", field, type(exc).__name__, fred_id)
+
+        if len(pts) < 12:
+            try:
+                pts = _fetch_fred_monthly_series(fred_id, min_year=2016)
+                out["source"] = "U.S. Bureau of Economic Analysis (BEA qua FRED Mirror)"
+            except Exception as exc:
+                logger.warning("FRED BEA fallback '%s' failed: %s", fred_id, exc)
+
         out[field] = _compute_yoy_mom(pts)
+
+    if not _is_valid_source_data("bea", out):
+        raise RuntimeError("Không thể tải dữ liệu BEA PCE/Core PCE từ cả DBnomics và FRED.")
     return out
 
 
@@ -3257,13 +3587,41 @@ def _latest_valid(series: list[dict[str, Any]], key: str) -> tuple[dict[str, Any
     return valid[-1], (valid[-2] if len(valid) >= 2 else None)
 
 
-def build_dashboard(force: bool = False) -> dict[str, Any]:
+def build_dashboard(force: bool = False, mode: str = "smart", user_check: bool = False) -> dict[str, Any]:
     t0 = time.time()
     source_status: dict[str, dict[str, Any]] = {}
+    sync_counts = {
+        "db_cached": 0,
+        "updated": 0,
+        "repaired": 0,
+        "checked_unchanged": 0,
+        "db_preserved_on_err": 0,
+        "failed": 0,
+        "total_new_points": 0,
+    }
+    sync_lock = threading.Lock()
 
     def run_src(key: str, fn, strict_cooldown: bool = False):
-        data, refreshed = _get_cached_or_fetch(key, fn, force=force, respect_strict_cooldown=strict_cooldown)
-        source_status[key] = {"ok": data is not None, "fresh": refreshed}
+        data, info = _get_cached_or_fetch_smart(
+            key,
+            fn,
+            mode=mode,
+            force=force,
+            respect_strict_cooldown=strict_cooldown,
+            user_check=user_check,
+        )
+        with sync_lock:
+            source_status[key] = {
+                "ok": bool(info.get("ok")),
+                "fresh": bool(info.get("fresh")),
+                "action": info.get("action", "db_cached"),
+                "new_points": int(info.get("new_points") or 0),
+                "latest_date": info.get("latest_date"),
+            }
+            act = info.get("action", "db_cached")
+            if act in sync_counts:
+                sync_counts[act] += 1
+            sync_counts["total_new_points"] += int(info.get("new_points") or 0)
         return data
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
@@ -3493,6 +3851,12 @@ def build_dashboard(force: bool = False) -> dict[str, Any]:
             "sources": source_status,
             "degraded_sources": degraded_sources,
             "degraded": bool(degraded_sources),
+            "sync_report": {
+                "mode": mode,
+                "user_check": user_check,
+                **sync_counts,
+            },
+            "db_stats": macro_db.get_db_stats(),
         },
         "kpis": kpis,
         "vn_market": vn_mkt,
@@ -3533,11 +3897,16 @@ def build_dashboard(force: bool = False) -> dict[str, Any]:
     payload["strategy"] = compute_investment_strategy(payload)
     payload["briefing"] = generate_morning_briefing(payload)
 
+    # Persist assembled snapshot into SQLite WAL DB (and legacy JSON fallback)
+    macro_db.save_dashboard_snapshot(payload)
     _save_json(DASHBOARD_CACHE_FILE, payload)
     return payload
 
 
 def get_cached_dashboard() -> dict[str, Any] | None:
+    snap = macro_db.load_dashboard_snapshot()
+    if snap and isinstance(snap, dict):
+        return snap
     return _load_json(DASHBOARD_CACHE_FILE, None)
 
 
