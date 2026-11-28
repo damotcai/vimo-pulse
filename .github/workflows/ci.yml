@@ -1,0 +1,63 @@
+name: ECC Verification CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.7"
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Phase 1 & 2 — Python & JavaScript Syntax Checks
+        run: |
+          python -m py_compile server.py macro_fetcher.py bctc_macro_engine.py wyckoff_engine.py fusion_engine.py security_utils.py
+          for f in static/*.js; do
+            node --check "$f"
+          done
+
+      - name: Phase 4 — Run Automated Unit & HTTP Security Tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Phase 5 — Static Security Gate (Secrets & Unsafe Patterns)
+        run: |
+          python - << 'EOF'
+          import pathlib, re, sys
+
+          root = pathlib.Path(".")
+          patterns = {
+              "hardcoded_secret": re.compile(r"(?:sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{35})"),
+              "unsafe_shell": re.compile(r"shell\s*=\s*True"),
+              "tls_disabled": re.compile(r"verify\s*=\s*False"),
+              "eval_exec": re.compile(r"\b(?:eval|exec)\s*\("),
+          }
+          findings = []
+          for p in list(root.glob("*.py")) + list((root / "static").glob("*.js")):
+              text = p.read_text(encoding="utf-8", errors="ignore")
+              for name, rx in patterns.items():
+                  if rx.search(text):
+                      findings.append(f"{p}: matched {name}")
+          if findings:
+              print("SECURITY GATE FAILED:", *findings, sep="\n  - ")
+              sys.exit(1)
+          print("Security gate passed (0 unsafe patterns across Python & JS).")
+          EOF
