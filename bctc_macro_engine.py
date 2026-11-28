@@ -21,7 +21,7 @@ import json
 import math
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -487,13 +487,60 @@ def save_company_bundle(bundle: dict[str, Any]) -> Path:
     return path
 
 
-def load_company_bundle(ticker: str) -> dict[str, Any] | None:
+_price_refresh_ts: dict[str, float] = {}
+
+
+def _maybe_refresh_bundle_prices(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Tự động cập nhật lịch sử giá OHLCV mới nhất nếu cache BCTC cũ hơn 1 ngày giao dịch (chống kẹt giá cũ trên Render)."""
+    sym = (bundle.get("ticker") or "").upper().strip()
+    if not sym:
+        return bundle
+    now = time.time()
+    # Cooldown 20 minutes per ticker in memory so repeated requests stay instant
+    if now - _price_refresh_ts.get(sym, 0.0) < 1200:
+        return bundle
+
+    prices = bundle.get("prices") or []
+    last_date_str = str(prices[-1].get("date") or "")[:10] if prices else ""
+    today_vn = datetime.now(timezone(timedelta(hours=7)))
+    # Expected latest trading date (if Sat/Sun -> Friday, else today/yesterday)
+    days_stale = 99
+    if last_date_str:
+        try:
+            last_dt = datetime.strptime(last_date_str, "%Y-%m-%d").date()
+            days_stale = (today_vn.date() - last_dt).days
+        except Exception:
+            days_stale = 99
+
+    # On weekend (Sat=5 -> 1 day from Fri, Sun=6 -> 2 days from Fri), Friday data is already latest!
+    max_ok_gap = 1 if today_vn.weekday() == 5 else (2 if today_vn.weekday() == 6 else 0)
+    if days_stale <= max_ok_gap and len(prices) >= 60:
+        _price_refresh_ts[sym] = now
+        return bundle
+
+    _price_refresh_ts[sym] = now
+    try:
+        fresh_px = fetch_price_history(sym, years=2)
+        if fresh_px and len(fresh_px) >= 20:
+            bundle["prices"] = fresh_px
+            bundle["current_price"] = float(fresh_px[-1]["close"])
+            bundle["updated_at"] = today_vn.strftime("%Y-%m-%d %H:%M:%S")
+            save_company_bundle(bundle)
+    except Exception:
+        pass
+    return bundle
+
+
+def load_company_bundle(ticker: str, refresh_price: bool = True) -> dict[str, Any] | None:
     sym = ticker.strip().upper()
     path = BCTC_DIR / f"{sym}.json"
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        bundle = json.loads(path.read_text(encoding="utf-8"))
+        if refresh_price and isinstance(bundle, dict):
+            return _maybe_refresh_bundle_prices(bundle)
+        return bundle
     except Exception:
         return None
 

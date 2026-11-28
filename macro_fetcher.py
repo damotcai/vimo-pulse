@@ -93,7 +93,13 @@ def _init_source_cache() -> None:
         if not _source_cache:
             loaded = _load_json(SOURCE_CACHE_FILE, {})
             if isinstance(loaded, dict):
-                _source_cache = loaded
+                now = time.time()
+                # Discard entries older than 24 hours on boot so stale snapshots never pollute live startups
+                _source_cache = {
+                    k: v
+                    for k, v in loaded.items()
+                    if isinstance(v, dict) and (now - float(v.get("ts") or 0)) < 86400
+                }
 
 
 def _get_cached_or_fetch(key: str, fn, force: bool = False, respect_strict_cooldown: bool = False):
@@ -3013,23 +3019,27 @@ def build_dashboard(force: bool = False) -> dict[str, Any]:
         f_cal = ex.submit(run_src, "calendar", fetch_economic_calendar, False)
         f_news = ex.submit(run_src, "news", fetch_vietnam_policy_news)
 
-        bls = f_bls.result() or {}
-        bea = f_bea.result() or {}
-        nyfed = f_nyfed.result() or {}
-        yc = f_yc.result() or {}
-        fx = f_fx.result() or {}
-        vn_mkt = f_vn.result() or {}
-        vn_val = f_val.result() or {}
-        gold_vn = f_gold.result() or {"available": False}
-        vcb = f_vcb.result() or {}
-        try:
-            sbv = f_sbv.result(timeout=4.5) or {"available": False}
-        except Exception:
-            sbv = {"available": False}
-        wb = f_wb.result() or {}
-        pmi = f_pmi.result() or {}
-        cal = f_cal.result() or {"events": []}
-        news = f_news.result() or []
+        def _safe_res(fut, default, timeout=14.0):
+            try:
+                val = fut.result(timeout=timeout)
+                return val if val is not None else default
+            except Exception:
+                return default
+
+        bls = _safe_res(f_bls, {}, 14.0)
+        bea = _safe_res(f_bea, {}, 14.0)
+        nyfed = _safe_res(f_nyfed, {}, 12.0)
+        yc = _safe_res(f_yc, {}, 12.0)
+        fx = _safe_res(f_fx, {}, 14.0)
+        vn_mkt = _safe_res(f_vn, {}, 16.0)
+        vn_val = _safe_res(f_val, {}, 14.0)
+        gold_vn = _safe_res(f_gold, {"available": False}, 10.0)
+        vcb = _safe_res(f_vcb, {}, 10.0)
+        sbv = _safe_res(f_sbv, {"available": False}, 4.5)
+        wb = _safe_res(f_wb, {}, 12.0)
+        pmi = _safe_res(f_pmi, {}, 10.0)
+        cal = _safe_res(f_cal, {"events": []}, 12.0)
+        news = _safe_res(f_news, [], 12.0)
 
     # Prepend live Vietnam stock indices + VN-Index P/E + SJC Gold to top ticker strip!
     vn_tickers = []

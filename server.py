@@ -31,6 +31,15 @@ from bctc_macro_engine import (
 )
 from macro_fetcher import build_dashboard, fetch_calendar_fast, fetch_watchlist_stocks, get_cached_dashboard
 from wyckoff_engine import analyze_symbol_wyckoff, build_wyckoff_radar
+from fusion_engine import (
+    PEER_PRESETS,
+    build_morning_brief,
+    build_peer_comparison,
+    build_triple_fusion_matrix,
+    build_vn30_wyckoff_scanner,
+    evaluate_portfolio_positions,
+    send_telegram_alert,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -38,24 +47,35 @@ STATIC_DIR = BASE_DIR / "static"
 _refresh_lock = threading.Lock()
 _last_live_ts = 0.0
 _latest_payload: dict | None = None
+FAST_MAX_AGE_SECONDS = 4 * 3600  # Never flash cached dashboard older than 4 hours!
+
+
+def _is_fresh_snapshot(payload: dict | None, max_age: float = FAST_MAX_AGE_SECONDS) -> bool:
+    if not payload or not isinstance(payload, dict):
+        return False
+    ts = (payload.get("meta") or {}).get("updated_ts")
+    if not ts:
+        return False
+    return (time.time() - float(ts)) <= max_age
 
 
 def get_dashboard_payload(mode: str = "live", force: bool = False) -> dict:
     global _latest_payload, _last_live_ts
 
-    # Fast mode: immediately serve in-memory or disk-cached snapshot if present
+    # Fast mode: only serve in-memory or disk-cached snapshot if it is genuinely FRESH (<= 4h)
     if mode == "fast" and not force:
-        if _latest_payload is not None:
+        if _is_fresh_snapshot(_latest_payload):
             return {**_latest_payload, "_cached_fast": True}
         disk = get_cached_dashboard()
-        if disk is not None:
+        if _is_fresh_snapshot(disk):
             _latest_payload = disk
             return {**disk, "_cached_fast": True}
+        return {"_stale_skipped": True, "_cached_fast": True}
 
     with _refresh_lock:
         now = time.time()
         # Coalesce duplicate live calls within 15 seconds unless force=True
-        if not force and _latest_payload is not None and (now - _last_live_ts) < 15:
+        if not force and _is_fresh_snapshot(_latest_payload, max_age=180) and (now - _last_live_ts) < 15:
             return {**_latest_payload, "_cached_fast": False}
         data = build_dashboard(force=force)
         _latest_payload = data
@@ -293,6 +313,15 @@ class MacroHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(exc)}, status=500)
             return
 
+        if path == "/api/wyckoff/vn30":
+            try:
+                force = qs.get("force", ["0"])[0] in ("1", "true", "yes")
+                dash = _latest_payload or get_cached_dashboard() or get_dashboard_payload(mode="live", force=False)
+                self._send_json(build_vn30_wyckoff_scanner(dash, force=force))
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+            return
+
         if path.startswith("/api/wyckoff/analyze/"):
             symbol = path.split("/api/wyckoff/analyze/", 1)[1].strip("/").upper()
             try:
@@ -301,6 +330,54 @@ class MacroHandler(BaseHTTPRequestHandler):
                 self._send_json(res)
             except Exception as exc:
                 self._send_json({"error": str(exc)}, status=404 if "Không lấy được" in str(exc) else 500)
+            return
+
+        # --- v8 Super-Fusion 3-in-1, Peer Comparison & Morning Brief Endpoints ---
+        if path == "/api/fusion/matrix":
+            try:
+                scenario = (qs.get("scenario", ["live"])[0] or "live").lower()
+                force = qs.get("force", ["0"])[0] in ("1", "true", "yes")
+                dash = _latest_payload or get_cached_dashboard() or get_dashboard_payload(mode="live", force=False)
+                macro_ctx = _get_live_macro_context(scenario=scenario)
+                self._send_json(build_triple_fusion_matrix(dash, macro_ctx, scenario=scenario, force=force))
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+            return
+
+        if path == "/api/bctc/peers":
+            try:
+                raw_t = (qs.get("tickers", [""])[0] or "").strip()
+                preset_key = (qs.get("preset", [""])[0] or "").strip().upper()
+                scenario = (qs.get("scenario", ["live"])[0] or "live").lower()
+                if preset_key and preset_key in PEER_PRESETS:
+                    tickers = PEER_PRESETS[preset_key]["tickers"]
+                else:
+                    tickers = [t.strip() for t in raw_t.split(",") if t.strip()]
+                if not tickers:
+                    tickers = PEER_PRESETS["BANK"]["tickers"]
+                dash = _latest_payload or get_cached_dashboard() or get_dashboard_payload(mode="live", force=False)
+                macro_ctx = _get_live_macro_context(scenario=scenario)
+                self._send_json(build_peer_comparison(tickers, dash, macro_ctx, scenario=scenario))
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=400 if "ít nhất" in str(exc) else 500)
+            return
+
+        if path == "/api/briefing/morning":
+            try:
+                scenario = (qs.get("scenario", ["live"])[0] or "live").lower()
+                dash = _latest_payload or get_cached_dashboard() or get_dashboard_payload(mode="live", force=False)
+                macro_ctx = _get_live_macro_context(scenario=scenario)
+                self._send_json(build_morning_brief(dash, macro_ctx, scenario=scenario))
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+            return
+
+        if path == "/manifest.json":
+            self._send_file(STATIC_DIR / "manifest.json", override_mime="application/manifest+json; charset=utf-8")
+            return
+
+        if path == "/sw.js":
+            self._send_file(STATIC_DIR / "sw.js", override_mime="application/javascript; charset=utf-8")
             return
 
         if path in ("/", "/index.html"):
@@ -363,15 +440,53 @@ class MacroHandler(BaseHTTPRequestHandler):
                 self._send_json(out)
                 return
 
+            if path == "/api/portfolio/evaluate":
+                positions = body.get("positions") or []
+                scenario = (body.get("scenario") or "live").lower()
+                dash = _latest_payload or get_cached_dashboard() or get_dashboard_payload(mode="live", force=False)
+                macro_ctx = _get_live_macro_context(scenario=scenario)
+                self._send_json(evaluate_portfolio_positions(positions, dash, macro_ctx))
+                return
+
+            if path == "/api/briefing/morning":
+                positions = body.get("positions") or []
+                scenario = (body.get("scenario") or "live").lower()
+                dash = _latest_payload or get_cached_dashboard() or get_dashboard_payload(mode="live", force=False)
+                macro_ctx = _get_live_macro_context(scenario=scenario)
+                self._send_json(build_morning_brief(dash, macro_ctx, scenario=scenario, positions=positions))
+                return
+
+            if path == "/api/alerts/telegram":
+                res = send_telegram_alert(
+                    bot_token=body.get("bot_token", ""),
+                    chat_id=body.get("chat_id", ""),
+                    text=body.get("text", ""),
+                )
+                self._send_json(res)
+                return
+
             self._send_json({"error": "Endpoint not found"}, status=404)
         except Exception as exc:
             self._send_json({"error": str(exc)}, status=500)
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8765) -> None:
-    # Warm up disk cache in memory immediately
+    # Only warm up disk cache if it is genuinely fresh (<= 4 hours); never serve stale days-old cache!
     global _latest_payload
-    _latest_payload = get_cached_dashboard()
+    disk = get_cached_dashboard()
+    if _is_fresh_snapshot(disk):
+        _latest_payload = disk
+    else:
+        _latest_payload = None
+
+    # Kick off immediate background live data sync on server startup (critical for Render cold starts!)
+    def _boot_warmup() -> None:
+        try:
+            get_dashboard_payload(mode="live", force=not _is_fresh_snapshot(_latest_payload, max_age=600))
+        except Exception:
+            pass
+
+    threading.Thread(target=_boot_warmup, daemon=True).start()
 
     server = ThreadingHTTPServer((host, port), MacroHandler)
     print("=" * 64, flush=True)
