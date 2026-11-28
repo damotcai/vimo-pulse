@@ -19,6 +19,9 @@ from bctc_macro_engine import (
     list_cached_companies,
     load_company_bundle,
 )
+from security_utils import get_logger, validate_ticker
+
+logger = get_logger("wyckoff_engine")
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
@@ -702,7 +705,7 @@ def analyze_wyckoff(
 
 def analyze_symbol_wyckoff(symbol: str, dashboard: dict[str, Any] | None) -> dict[str, Any]:
     """Chạy Wyckoff × Vĩ mô cho bất kỳ chỉ số (VNINDEX/VN30/HNX/UPCOM) hoặc bất kỳ cổ phiếu VN nào."""
-    sym = symbol.strip().upper()
+    sym = validate_ticker(symbol)
     macro_ctx = extract_macro_context(dashboard)
     vn_mkt = (dashboard or {}).get("vn_market") or {}
     indices = vn_mkt.get("indices") or {}
@@ -803,8 +806,8 @@ def build_wyckoff_radar(dashboard: dict[str, Any] | None) -> dict[str, Any]:
                 index_items.append(_summarize(res))
                 if code == "VNINDEX":
                     vni_full = res
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Wyckoff radar index %s failed: %s", code, exc)
 
     stock_items = []
     for c in list_cached_companies():
@@ -820,8 +823,8 @@ def build_wyckoff_radar(dashboard: dict[str, Any] | None) -> dict[str, Any]:
                     is_index=False,
                 )
                 stock_items.append(_summarize(res))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Wyckoff radar stock %s failed: %s", c["ticker"], exc)
 
     stock_items.sort(key=lambda x: (x["confluence_score"], x["wyckoff_score"]), reverse=True)
 

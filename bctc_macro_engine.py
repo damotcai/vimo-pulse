@@ -20,12 +20,26 @@ import io
 import json
 import math
 import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import requests
+
+from security_utils import (
+    atomic_write_json,
+    build_pooled_session,
+    cleanup_old_files,
+    get_logger,
+    validate_ai_model,
+    validate_outbound_https_url,
+    validate_ticker,
+)
+
+logger = get_logger("bctc_macro_engine")
+_HTTP = build_pooled_session(pool_connections=16, pool_maxsize=16)
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -308,11 +322,11 @@ def _infer_sector_code(report_model: str, industry_name: str, ticker: str) -> st
 
 def _get_json(url: str, headers: dict[str, str], timeout: int = 12) -> dict[str, Any] | None:
     try:
-        r = requests.get(url, headers=headers, timeout=timeout)
+        r = _HTTP.get(url, headers=headers, timeout=timeout)
         if r.status_code == 200:
             return r.json()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Upstream GET failed (%s): %s", url.split("?")[0], type(exc).__name__)
     return None
 
 
@@ -389,9 +403,7 @@ def fetch_price_history(ticker: str, years: int = 3) -> list[dict[str, Any]]:
 
 
 def scrape_company(ticker: str, save: bool = True) -> dict[str, Any]:
-    sym = ticker.strip().upper()
-    if not sym or len(sym) > 10:
-        raise ValueError("Mã cổ phiếu không hợp lệ.")
+    sym = validate_ticker(ticker)
 
     metrics_res = _get_json(f"{VCI_BASE}/{sym}/financial-statement/metrics", VCI_HEADERS)
     if not metrics_res or not metrics_res.get("successful") or not metrics_res.get("data"):
@@ -479,15 +491,16 @@ def scrape_company(ticker: str, save: bool = True) -> dict[str, Any]:
 
 
 def save_company_bundle(bundle: dict[str, Any]) -> Path:
-    sym = bundle["ticker"].upper()
-    path = BCTC_DIR / f"{sym}.json"
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(bundle, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    sym = validate_ticker(bundle.get("ticker"))
+    path = (BCTC_DIR / f"{sym}.json").resolve()
+    if not path.is_relative_to(BCTC_DIR.resolve()):
+        raise ValueError("Đường dẫn lưu BCTC không hợp lệ.")
+    atomic_write_json(path, bundle)
     return path
 
 
 _price_refresh_ts: dict[str, float] = {}
+_price_refresh_lock = threading.Lock()
 
 
 def _maybe_refresh_bundle_prices(bundle: dict[str, Any]) -> dict[str, Any]:
@@ -497,8 +510,9 @@ def _maybe_refresh_bundle_prices(bundle: dict[str, Any]) -> dict[str, Any]:
         return bundle
     now = time.time()
     # Cooldown 20 minutes per ticker in memory so repeated requests stay instant
-    if now - _price_refresh_ts.get(sym, 0.0) < 1200:
-        return bundle
+    with _price_refresh_lock:
+        if now - _price_refresh_ts.get(sym, 0.0) < 1200:
+            return bundle
 
     prices = bundle.get("prices") or []
     last_date_str = str(prices[-1].get("date") or "")[:10] if prices else ""
@@ -509,16 +523,22 @@ def _maybe_refresh_bundle_prices(bundle: dict[str, Any]) -> dict[str, Any]:
         try:
             last_dt = datetime.strptime(last_date_str, "%Y-%m-%d").date()
             days_stale = (today_vn.date() - last_dt).days
-        except Exception:
+        except Exception as exc:
+            logger.debug("Invalid price date '%s' for %s: %s", last_date_str, sym, exc)
             days_stale = 99
 
     # On weekend (Sat=5 -> 1 day from Fri, Sun=6 -> 2 days from Fri), Friday data is already latest!
     max_ok_gap = 1 if today_vn.weekday() == 5 else (2 if today_vn.weekday() == 6 else 0)
-    if days_stale <= max_ok_gap and len(prices) >= 60:
+    with _price_refresh_lock:
+        if len(_price_refresh_ts) > 500:
+            cutoff = now - 3600
+            for k in [k for k, v in _price_refresh_ts.items() if v < cutoff]:
+                del _price_refresh_ts[k]
         _price_refresh_ts[sym] = now
+
+    if days_stale <= max_ok_gap and len(prices) >= 60:
         return bundle
 
-    _price_refresh_ts[sym] = now
     try:
         fresh_px = fetch_price_history(sym, years=2)
         if fresh_px and len(fresh_px) >= 20:
@@ -526,22 +546,26 @@ def _maybe_refresh_bundle_prices(bundle: dict[str, Any]) -> dict[str, Any]:
             bundle["current_price"] = float(fresh_px[-1]["close"])
             bundle["updated_at"] = today_vn.strftime("%Y-%m-%d %H:%M:%S")
             save_company_bundle(bundle)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to refresh OHLCV prices for %s: %s", sym, exc)
     return bundle
 
 
 def load_company_bundle(ticker: str, refresh_price: bool = True) -> dict[str, Any] | None:
-    sym = ticker.strip().upper()
-    path = BCTC_DIR / f"{sym}.json"
-    if not path.exists():
+    try:
+        sym = validate_ticker(ticker)
+    except ValueError:
+        return None
+    path = (BCTC_DIR / f"{sym}.json").resolve()
+    if not path.is_relative_to(BCTC_DIR.resolve()) or not path.exists():
         return None
     try:
         bundle = json.loads(path.read_text(encoding="utf-8"))
         if refresh_price and isinstance(bundle, dict):
             return _maybe_refresh_bundle_prices(bundle)
         return bundle
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to load BCTC bundle for %s: %s", sym, exc)
         return None
 
 
@@ -604,10 +628,14 @@ def ensure_default_universe_loaded() -> list[dict[str, Any]]:
 
 def export_to_excel(ticker: str, period: str = "years") -> tuple[Path, str]:
     """Xuất toàn bộ BCTC ra .xlsx bằng openpyxl nhẹ (hoặc .csv dự phòng)."""
-    bundle = load_company_bundle(ticker)
+    sym_clean = validate_ticker(ticker)
+    if period not in ("years", "quarters"):
+        period = "years"
+    cleanup_old_files(EXPORT_DIR, max_age_seconds=86400)
+    bundle = load_company_bundle(sym_clean)
     if not bundle:
-        raise FileNotFoundError(f"Chưa có dữ liệu BCTC cho mã {ticker}.")
-    sym = bundle["ticker"]
+        raise FileNotFoundError(f"Chưa có dữ liệu BCTC cho mã {sym_clean}.")
+    sym = validate_ticker(bundle.get("ticker") or sym_clean)
     stamp = datetime.now().strftime("%Y%m%d")
     metrics = bundle.get("metrics", {})
     statements = bundle.get("statements", {})
@@ -715,6 +743,7 @@ def extract_macro_context(dashboard: dict[str, Any] | None) -> dict[str, Any]:
     if not dashboard or not isinstance(dashboard, dict):
         return {
             "available": False,
+            "degraded": True,
             "updated_at_vn": "Chưa đồng bộ",
             "macro_score": 55,
             "stance_label": "TRUNG LẬP (Mặc định)",
@@ -2603,35 +2632,57 @@ def run_fused_ai_analysis(
     )
 
     if prov == "gemini":
-        chosen = model.strip() or "gemini-2.5-flash"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{chosen}:generateContent?key={api_key.strip()}"
-        resp = requests.post(
-            url,
-            json={
-                "systemInstruction": {"parts": [{"text": sys_prompt}]},
-                "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                "generationConfig": {"temperature": 0.35, "maxOutputTokens": 4096},
-            },
-            timeout=60,
-        )
+        chosen = validate_ai_model(model, "gemini-2.5-flash")
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{chosen}:generateContent"
+        try:
+            resp = _HTTP.post(
+                url,
+                headers={"x-goog-api-key": api_key.strip(), "Content-Type": "application/json"},
+                json={
+                    "systemInstruction": {"parts": [{"text": sys_prompt}]},
+                    "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                    "generationConfig": {"temperature": 0.35, "maxOutputTokens": 4096},
+                },
+                timeout=60,
+                allow_redirects=False,
+            )
+        except requests.RequestException as exc:
+            logger.warning("Gemini API connection error: %s", type(exc).__name__)
+            raise RuntimeError("Không thể kết nối tới Gemini API (timeout hoặc lỗi mạng).") from exc
         if resp.status_code != 200:
-            raise RuntimeError(f"Gemini API lỗi ({resp.status_code}): {resp.text[:240]}")
+            err_msg = ""
+            try:
+                err_msg = str((resp.json().get("error") or {}).get("message") or "")[:180]
+            except Exception:
+                err_msg = ""
+            raise RuntimeError(f"Gemini API lỗi ({resp.status_code}){(': ' + err_msg) if err_msg else ''}")
         text = resp.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
         return {"mode": "online", "provider": "gemini", "model": chosen, "content": text}
 
-    chosen = model.strip() or "gpt-4o-mini"
-    endpoint = (base_url.strip() or "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
-    resp = requests.post(
-        endpoint,
-        headers={"Authorization": f"Bearer {api_key.strip()}", "Content-Type": "application/json"},
-        json={
-            "model": chosen,
-            "temperature": 0.35,
-            "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_prompt}],
-        },
-        timeout=60,
-    )
+    chosen = validate_ai_model(model, "gpt-4o-mini")
+    safe_base = validate_outbound_https_url(base_url, default_url="https://api.openai.com/v1").rstrip("/")
+    endpoint = safe_base + "/chat/completions"
+    try:
+        resp = _HTTP.post(
+            endpoint,
+            headers={"Authorization": f"Bearer {api_key.strip()}", "Content-Type": "application/json"},
+            json={
+                "model": chosen,
+                "temperature": 0.35,
+                "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_prompt}],
+            },
+            timeout=60,
+            allow_redirects=False,
+        )
+    except requests.RequestException as exc:
+        logger.warning("OpenAI-compatible API connection error: %s", type(exc).__name__)
+        raise RuntimeError("Không thể kết nối tới AI API (timeout hoặc lỗi mạng).") from exc
     if resp.status_code != 200:
-        raise RuntimeError(f"API lỗi ({resp.status_code}): {resp.text[:240]}")
+        err_msg = ""
+        try:
+            err_msg = str((resp.json().get("error") or {}).get("message") or "")[:180]
+        except Exception:
+            err_msg = ""
+        raise RuntimeError(f"AI API lỗi ({resp.status_code}){(': ' + err_msg) if err_msg else ''}")
     text = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
     return {"mode": "online", "provider": "openai", "model": chosen, "content": text}

@@ -30,7 +30,12 @@ from bctc_macro_engine import (
     scrape_company,
 )
 from macro_fetcher import fetch_watchlist_stocks
+from security_utils import build_pooled_session, get_logger, validate_telegram_creds
 from wyckoff_engine import analyze_wyckoff
+
+logger = get_logger("fusion_engine")
+_HTTP = build_pooled_session(pool_connections=12, pool_maxsize=12)
+_FUSION_CACHE_MAX = 16
 
 VN_TZ = timezone(timedelta(hours=7))
 
@@ -301,15 +306,18 @@ def build_triple_fusion_matrix(
     vni_series = ((vn_mkt.get("indices") or {}).get("VNINDEX") or {}).get("series") or []
 
     rows: list[dict[str, Any]] = []
+    failed_tickers: list[str] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
-        futs = [ex.submit(_fuse_single_ticker, tk, macro_ctx, vni_series) for tk in tickers]
-        for fut in concurrent.futures.as_completed(futs):
+        fut_map = {ex.submit(_fuse_single_ticker, tk, macro_ctx, vni_series): tk for tk in tickers}
+        for fut in concurrent.futures.as_completed(fut_map):
+            tk = fut_map[fut]
             try:
                 item = fut.result()
                 if item:
                     rows.append(item)
-            except Exception:
-                pass
+            except Exception as exc:
+                failed_tickers.append(tk)
+                logger.warning("Triple fusion failed for %s: %s", tk, exc)
 
     rows.sort(key=lambda r: (r["triple_score"], r["upside_pct"]), reverse=True)
 
@@ -346,9 +354,13 @@ def build_triple_fusion_matrix(
         "counts": counts,
         "summary": summary_text,
         "rows": rows,
+        "failed_tickers": sorted(failed_tickers),
     }
 
     with _fusion_lock:
+        if len(_fusion_cache) >= _FUSION_CACHE_MAX and cache_key not in _fusion_cache:
+            oldest_k = min(_fusion_cache.items(), key=lambda kv: kv[1][0])[0]
+            del _fusion_cache[oldest_k]
         _fusion_cache[cache_key] = (time.time(), payload)
     return payload
 
@@ -943,24 +955,26 @@ def build_morning_brief(
 
 def send_telegram_alert(bot_token: str, chat_id: str, text: str) -> dict[str, Any]:
     """Gửi tin nhắn cảnh báo / Bản tin Sáng tới Telegram Bot của người dùng (server không lưu token)."""
-    tok = (bot_token or "").strip()
-    cid = (chat_id or "").strip()
+    tok, cid = validate_telegram_creds(bot_token, chat_id)
     msg = (text or "").strip()
-    if not tok or not cid:
-        raise ValueError("Vui lòng nhập đầy đủ Telegram Bot Token và Chat ID.")
     if not msg:
         raise ValueError("Nội dung tin nhắn đang trống.")
     if len(msg) > 4000:
         msg = msg[:3980] + "\n..."
 
     url = f"https://api.telegram.org/bot{tok}/sendMessage"
-    resp = requests.post(
-        url,
-        json={"chat_id": cid, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True},
-        timeout=10,
-    )
+    try:
+        resp = _HTTP.post(
+            url,
+            json={"chat_id": cid, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True},
+            timeout=10,
+            allow_redirects=False,
+        )
+    except requests.RequestException as exc:
+        logger.warning("Telegram API network error (%s)", type(exc).__name__)
+        raise RuntimeError("Không thể kết nối tới Telegram API (timeout hoặc lỗi mạng).") from exc
     data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
     if not resp.ok or not data.get("ok"):
-        desc = data.get("description") or f"HTTP {resp.status_code}"
+        desc = str(data.get("description") or f"HTTP {resp.status_code}")[:160]
         raise RuntimeError(f"Telegram từ chối gửi tin: {desc}")
     return {"ok": True, "message_id": (data.get("result") or {}).get("message_id"), "sent_at_vn": _now_vn_str()}

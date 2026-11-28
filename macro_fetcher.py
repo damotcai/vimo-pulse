@@ -27,6 +27,11 @@ from typing import Any
 
 import requests
 
+from security_utils import atomic_write_json, build_pooled_session, get_logger
+
+logger = get_logger("macro_fetcher")
+_HTTP = build_pooled_session(pool_connections=20, pool_maxsize=20)
+
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -57,6 +62,7 @@ SOURCE_TTL = {
     "vn_market": 120,     # Live VN-Index, VN30, HNX, UPCoM, 8 HOSE Sectors & Foreign/Prop Flow
     "vn_valuation": 300,  # Live VN-Index P/E & 8 Sector Representative Bellwether Stocks
     "gold_vn": 180,       # Live SJC Bar, SJC Ring 9999 vs World Gold Converted Spread
+    "vn_money_fx": 300,   # Live VN Interbank Rates (ON/1W/2W), SBV Policy/Deposit & 3-Tier FX (Central/Bank/Free)
     "vcb": 310,           # Vietcombank XML explicitly asks <= 1 req per 5 min
     "sbv": 600,           # Optional SBV portal (short timeout, skipped cleanly if unavailable)
     "worldbank": 3600,    # Annual VN vs US comparison
@@ -73,18 +79,16 @@ def _load_json(path: Path, default: Any) -> Any:
     try:
         if path.exists():
             return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to read JSON %s: %s", path.name, exc)
     return default
 
 
 def _save_json(path: Path, data: Any) -> None:
     try:
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(path)
-    except Exception:
-        pass
+        atomic_write_json(path, data, indent=2)
+    except Exception as exc:
+        logger.warning("Failed to write JSON %s: %s", path.name, exc)
 
 
 def _init_source_cache() -> None:
@@ -125,8 +129,8 @@ def _get_cached_or_fetch(key: str, fn, force: bool = False, respect_strict_coold
                 _source_cache[key] = {"ts": now, "data": fresh}
                 _save_json(SOURCE_CACHE_FILE, _source_cache)
             return fresh, True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Upstream source '%s' fetch failed: %s", key, exc)
 
     if entry and entry.get("data") is not None:
         return entry["data"], False
@@ -1729,6 +1733,265 @@ def fetch_sbv_optional() -> dict[str, Any]:
         return {"available": False}
 
 
+def _fetch_wichart_vimo(name: str) -> dict[str, Any] | None:
+    """Fetch public WiChart / WiData Vietnam macro series (CDN-fast, works on Render cloud)."""
+    headers = {
+        **HEADERS,
+        "Referer": "https://vietnambiz.vn/",
+        "Origin": "https://vietnambiz.vn",
+    }
+    r = requests.get(
+        "https://api.wichart.vn/vietnambiz/vi-mo",
+        params={"name": name},
+        headers=headers,
+        timeout=9,
+    )
+    if r.status_code != 200:
+        return None
+    data = r.json()
+    return data if isinstance(data, dict) else None
+
+
+def _wichart_series_to_map(series_obj: dict[str, Any]) -> dict[str, float]:
+    """Convert WiChart [ms_timestamp, value] list to sorted {YYYY-MM-DD: float} dict."""
+    out: dict[str, float] = {}
+    for pt in (series_obj.get("data") or []):
+        if not pt or len(pt) < 2 or pt[0] is None or pt[1] is None:
+            continue
+        try:
+            dt = datetime.fromtimestamp(float(pt[0]) / 1000.0, tz=VN_TZ).strftime("%Y-%m-%d")
+            val = float(pt[1])
+            if math.isfinite(val):
+                out[dt] = val
+        except Exception:
+            continue
+    return out
+
+
+def _fetch_tygiausd_free_live() -> dict[str, Any] | None:
+    """Fetch live intraday black-market (tự do) USD buy/sell from tygiausd.org (optional supplement)."""
+    try:
+        r = requests.get("https://tygiausd.org/", headers=HEADERS, timeout=5)
+        if r.status_code != 200 or len(r.text) < 2000:
+            return None
+        clean = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", r.text, flags=re.S | re.I)
+        clean = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " | ", clean))
+        m = re.search(
+            r"USD\s*chợ\s*đen\s*(?:\|\s*)*([\d.,]{5,7})\s*(?:\|\s*)*[+-]?[\d.,]*\s*(?:\|\s*)*([\d.,]{5,7})",
+            clean,
+            re.I,
+        )
+        if not m:
+            return None
+        buy = float(re.sub(r"[^\d]", "", m.group(1)))
+        sell = float(re.sub(r"[^\d]", "", m.group(2)))
+        if 20000 <= buy <= 35000 and 20000 <= sell <= 35000:
+            return {"free_buy": round(buy), "free_sell": round(sell)}
+    except Exception:
+        pass
+    return None
+
+
+def fetch_vn_money_and_fx_tiers() -> dict[str, Any]:
+    """
+    Lấy dữ liệu lịch sử (~2 năm, ~500 phiên) & live cho:
+      1. Lãi suất Liên ngân hàng VND (Qua đêm ON, 1 Tuần, 2 Tuần) + Điều hành NHNN + Huy động NHTM
+      2. Tỷ giá 3 Tầng Việt Nam: Trung tâm (SBV + Trần/Sàn ±5%), Thương mại (NHTM bán ra), Tự do / Chợ đen (Mua & Bán)
+    Nguồn chính: WiData / WiChart (CDN nhanh, ổn định cả ở VN & Render) + bổ sung giá chợ đen intraday từ tygiausd.org.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+        f_ib = ex.submit(_fetch_wichart_vimo, "lslnh")
+        f_fx = ex.submit(_fetch_wichart_vimo, "dhtg")
+        f_pol = ex.submit(_fetch_wichart_vimo, "lsdh")
+        f_dep = ex.submit(_fetch_wichart_vimo, "lshd")
+        f_free = ex.submit(_fetch_tygiausd_free_live)
+
+        def _get(f):
+            try:
+                return f.result(timeout=10)
+            except Exception:
+                return None
+
+        raw_ib = _get(f_ib)
+        raw_fx = _get(f_fx)
+        raw_pol = _get(f_pol)
+        raw_dep = _get(f_dep)
+        live_free = _get(f_free)
+
+    # --- 1. Interbank Interest Rates (ON, 1W, 2W) + Policy + Deposit Rates ---
+    ib_maps: dict[str, dict[str, float]] = {"on": {}, "w1": {}, "w2": {}}
+    if raw_ib:
+        for s in (raw_ib.get("chart") or {}).get("series") or []:
+            nm = (s.get("name") or "").lower()
+            if "qua đêm" in nm:
+                ib_maps["on"] = _wichart_series_to_map(s)
+            elif "1 tuần" in nm:
+                ib_maps["w1"] = _wichart_series_to_map(s)
+            elif "2 tuần" in nm:
+                ib_maps["w2"] = _wichart_series_to_map(s)
+
+    ib_dates = sorted(set(ib_maps["on"]) | set(ib_maps["w1"]) | set(ib_maps["w2"]))
+    ib_series = [
+        {
+            "date": d,
+            "on": round(ib_maps["on"][d], 2) if d in ib_maps["on"] else None,
+            "w1": round(ib_maps["w1"][d], 2) if d in ib_maps["w1"] else None,
+            "w2": round(ib_maps["w2"][d], 2) if d in ib_maps["w2"] else None,
+        }
+        for d in ib_dates
+    ]
+
+    # Policy rates (latest)
+    pol_latest: dict[str, float | None] = {"refinancing": None, "discount": None, "omo_on": None}
+    if raw_pol:
+        for s in (raw_pol.get("chart") or {}).get("series") or []:
+            nm = (s.get("name") or "").lower()
+            mp = _wichart_series_to_map(s)
+            if not mp:
+                continue
+            last_v = round(mp[max(mp)], 2)
+            if "tái cấp vốn" in nm:
+                pol_latest["refinancing"] = last_v
+            elif "chiết khấu" in nm:
+                pol_latest["discount"] = last_v
+            elif "qua đêm" in nm or "thiếu hụt" in nm:
+                pol_latest["omo_on"] = last_v
+
+    # Commercial bank deposit rates (1-3M, 6-9M, 13M)
+    dep_maps: dict[str, dict[str, float]] = {"m1_3": {}, "m6_9": {}, "m13": {}}
+    if raw_dep:
+        for s in (raw_dep.get("chart") or {}).get("series") or []:
+            nm = (s.get("name") or "").lower()
+            if "1-3" in nm:
+                dep_maps["m1_3"] = _wichart_series_to_map(s)
+            elif "6-9" in nm:
+                dep_maps["m6_9"] = _wichart_series_to_map(s)
+            elif "13" in nm or "12" in nm:
+                dep_maps["m13"] = _wichart_series_to_map(s)
+
+    dep_dates = sorted(set(dep_maps["m1_3"]) | set(dep_maps["m6_9"]) | set(dep_maps["m13"]))
+    dep_series = [
+        {
+            "date": d,
+            "m1_3": round(dep_maps["m1_3"][d], 2) if d in dep_maps["m1_3"] else None,
+            "m6_9": round(dep_maps["m6_9"][d], 2) if d in dep_maps["m6_9"] else None,
+            "m13": round(dep_maps["m13"][d], 2) if d in dep_maps["m13"] else None,
+        }
+        for d in dep_dates
+    ]
+
+    valid_on = [p for p in ib_series if p["on"] is not None]
+    last_ib = valid_on[-1] if valid_on else (ib_series[-1] if ib_series else {})
+    prev1_on = valid_on[-2]["on"] if len(valid_on) >= 2 else None
+    prev5_on = valid_on[-6]["on"] if len(valid_on) >= 6 else None
+    last_dep = dep_series[-1] if dep_series else {}
+
+    interbank_payload = {
+        "available": bool(ib_series),
+        "source": "NHNN / WiData (WiChart Live)",
+        "updated_at": (raw_ib or {}).get("timeUpdate") or (last_ib.get("date") or ""),
+        "latest": {
+            "date": last_ib.get("date"),
+            "on": last_ib.get("on"),
+            "w1": last_ib.get("w1"),
+            "w2": last_ib.get("w2"),
+            "delta_on_1d": round(last_ib["on"] - prev1_on, 2) if (last_ib.get("on") is not None and prev1_on is not None) else None,
+            "delta_on_5d": round(last_ib["on"] - prev5_on, 2) if (last_ib.get("on") is not None and prev5_on is not None) else None,
+            "policy_refinancing": pol_latest["refinancing"],
+            "policy_discount": pol_latest["discount"],
+            "policy_omo_on": pol_latest["omo_on"],
+            "deposit_1_3m": last_dep.get("m1_3"),
+            "deposit_6_9m": last_dep.get("m6_9"),
+            "deposit_13m": last_dep.get("m13"),
+        },
+        "series": ib_series,
+        "deposit_series": dep_series,
+    }
+
+    # --- 2. 3-Tier Vietnam USD/VND (Central SBV, Commercial Bank, Free/Black Market) ---
+    fx_maps: dict[str, dict[str, float]] = {"central": {}, "ceiling": {}, "floor": {}, "commercial": {}, "free": {}}
+    if raw_fx:
+        for s in (raw_fx.get("chart") or {}).get("series") or []:
+            nm = (s.get("name") or "").lower()
+            if "trung tâm" in nm:
+                fx_maps["central"] = _wichart_series_to_map(s)
+            elif "trần" in nm:
+                fx_maps["ceiling"] = _wichart_series_to_map(s)
+            elif "sàn" in nm:
+                fx_maps["floor"] = _wichart_series_to_map(s)
+            elif "nhtm" in nm or "thương mại" in nm:
+                fx_maps["commercial"] = _wichart_series_to_map(s)
+            elif "tự do" in nm or "chợ đen" in nm:
+                fx_maps["free"] = _wichart_series_to_map(s)
+
+    all_fx_dates = sorted(set(fx_maps["central"]) | set(fx_maps["commercial"]) | set(fx_maps["free"]))
+    fx_tier_series = []
+    # Carry-forward last known value on weekends/holidays where only bank/free quoted
+    prev_c = prev_ceil = prev_fl = prev_comm = prev_fr = None
+    for d in all_fx_dates:
+        c = fx_maps["central"].get(d, prev_c)
+        ceil_v = fx_maps["ceiling"].get(d, round(c * 1.05, 0) if c else prev_ceil)
+        fl_v = fx_maps["floor"].get(d, round(c * 0.95, 0) if c else prev_fl)
+        comm = fx_maps["commercial"].get(d, prev_comm)
+        fr = fx_maps["free"].get(d, prev_fr)
+        prev_c, prev_ceil, prev_fl, prev_comm, prev_fr = c, ceil_v, fl_v, comm, fr
+        if c is None and comm is None and fr is None:
+            continue
+        sp = round(fr - comm, 0) if (fr is not None and comm is not None) else None
+        sp_pct = round(((fr - comm) / comm) * 100.0, 2) if (fr is not None and comm) else None
+        fx_tier_series.append({
+            "date": d,
+            "central": round(c, 0) if c is not None else None,
+            "ceiling": round(ceil_v, 0) if ceil_v is not None else None,
+            "floor": round(fl_v, 0) if fl_v is not None else None,
+            "commercial": round(comm, 0) if comm is not None else None,
+            "free": round(fr, 0) if fr is not None else None,
+            "spread_free_bank": sp,
+            "spread_free_bank_pct": sp_pct,
+        })
+
+    # Append intraday live black-market update if today's date is newer
+    today_ymd = _now_vn().strftime("%Y-%m-%d")
+    last_ft = fx_tier_series[-1] if fx_tier_series else {}
+    free_buy_live = (live_free or {}).get("free_buy")
+    free_sell_live = (live_free or {}).get("free_sell") or last_ft.get("free")
+
+    latest_central = last_ft.get("central")
+    latest_ceil = last_ft.get("ceiling") or (round(latest_central * 1.05) if latest_central else None)
+    latest_floor = last_ft.get("floor") or (round(latest_central * 0.95) if latest_central else None)
+    latest_comm = last_ft.get("commercial")
+    latest_spread = round(free_sell_live - latest_comm, 0) if (free_sell_live and latest_comm) else None
+    latest_spread_pct = round(((free_sell_live - latest_comm) / latest_comm) * 100.0, 2) if (free_sell_live and latest_comm) else None
+    gap_ceil = round(latest_ceil - latest_comm, 0) if (latest_ceil and latest_comm) else None
+    gap_ceil_pct = round(((latest_ceil - latest_comm) / latest_ceil) * 100.0, 2) if (latest_ceil and latest_comm) else None
+
+    fx_tiers_payload = {
+        "available": bool(fx_tier_series),
+        "source": "NHNN · NHTM · Thị trường Tự do (WiData & TyGiaUSD)",
+        "updated_at": (raw_fx or {}).get("timeUpdate") or today_ymd,
+        "latest": {
+            "date": last_ft.get("date") or today_ymd,
+            "central": latest_central,
+            "ceiling": latest_ceil,
+            "floor": latest_floor,
+            "commercial_sell": latest_comm,
+            "free_buy": free_buy_live,
+            "free_sell": free_sell_live,
+            "spread_free_bank": latest_spread,
+            "spread_free_bank_pct": latest_spread_pct,
+            "gap_to_ceiling": gap_ceil,
+            "gap_to_ceiling_pct": gap_ceil_pct,
+        },
+        "series": fx_tier_series,
+    }
+
+    return {
+        "available": interbank_payload["available"] or fx_tiers_payload["available"],
+        "interbank": interbank_payload,
+        "fx_tiers": fx_tiers_payload,
+    }
+
+
 # =============================================================================
 # 9. World Bank Annual Comparison (Vietnam vs US: GDP, CPI, Unemployment)
 # =============================================================================
@@ -3003,7 +3266,7 @@ def build_dashboard(force: bool = False) -> dict[str, Any]:
         source_status[key] = {"ok": data is not None, "fresh": refreshed}
         return data
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=14) as ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
         f_bls = ex.submit(run_src, "bls", fetch_bls_data)
         f_bea = ex.submit(run_src, "bea", fetch_bea_pce_data)
         f_nyfed = ex.submit(run_src, "nyfed", fetch_nyfed_rates)
@@ -3012,6 +3275,7 @@ def build_dashboard(force: bool = False) -> dict[str, Any]:
         f_vn = ex.submit(run_src, "vn_market", fetch_vn_market_indices)
         f_val = ex.submit(run_src, "vn_valuation", fetch_vn_valuation_and_leaders)
         f_gold = ex.submit(run_src, "gold_vn", fetch_vn_gold_prices)
+        f_vnmfx = ex.submit(run_src, "vn_money_fx", fetch_vn_money_and_fx_tiers)
         f_vcb = ex.submit(run_src, "vcb", fetch_vietcombank_xml, True)
         f_sbv = ex.submit(run_src, "sbv", fetch_sbv_optional)
         f_wb = ex.submit(run_src, "worldbank", fetch_worldbank_comparison)
@@ -3019,27 +3283,59 @@ def build_dashboard(force: bool = False) -> dict[str, Any]:
         f_cal = ex.submit(run_src, "calendar", fetch_economic_calendar, False)
         f_news = ex.submit(run_src, "news", fetch_vietnam_policy_news)
 
-        def _safe_res(fut, default, timeout=14.0):
+        def _safe_res(fut, default, timeout=14.0, label=""):
             try:
                 val = fut.result(timeout=timeout)
                 return val if val is not None else default
-            except Exception:
+            except Exception as exc:
+                logger.warning("Dashboard future '%s' timed out/failed: %s", label, type(exc).__name__)
+                if label:
+                    source_status[label] = {"ok": False, "fresh": False}
                 return default
 
-        bls = _safe_res(f_bls, {}, 14.0)
-        bea = _safe_res(f_bea, {}, 14.0)
-        nyfed = _safe_res(f_nyfed, {}, 12.0)
-        yc = _safe_res(f_yc, {}, 12.0)
-        fx = _safe_res(f_fx, {}, 14.0)
-        vn_mkt = _safe_res(f_vn, {}, 16.0)
-        vn_val = _safe_res(f_val, {}, 14.0)
-        gold_vn = _safe_res(f_gold, {"available": False}, 10.0)
-        vcb = _safe_res(f_vcb, {}, 10.0)
-        sbv = _safe_res(f_sbv, {"available": False}, 4.5)
-        wb = _safe_res(f_wb, {}, 12.0)
-        pmi = _safe_res(f_pmi, {}, 10.0)
-        cal = _safe_res(f_cal, {"events": []}, 12.0)
-        news = _safe_res(f_news, [], 12.0)
+        bls = _safe_res(f_bls, {}, 14.0, "bls")
+        bea = _safe_res(f_bea, {}, 14.0, "bea")
+        nyfed = _safe_res(f_nyfed, {}, 12.0, "nyfed")
+        yc = _safe_res(f_yc, {}, 12.0, "yield_curve")
+        fx = _safe_res(f_fx, {}, 14.0, "fx_markets")
+        vn_mkt = _safe_res(f_vn, {}, 16.0, "vn_market")
+        vn_val = _safe_res(f_val, {}, 14.0, "vn_valuation")
+        gold_vn = _safe_res(f_gold, {"available": False}, 10.0, "gold_vn")
+        vn_money_fx = _safe_res(f_vnmfx, {"available": False, "interbank": {"available": False}, "fx_tiers": {"available": False}}, 12.0, "vn_money_fx")
+        vcb = _safe_res(f_vcb, {}, 10.0, "vcb")
+        sbv = _safe_res(f_sbv, {"available": False}, 4.5, "sbv")
+        wb = _safe_res(f_wb, {}, 12.0, "worldbank")
+        pmi = _safe_res(f_pmi, {}, 10.0, "pmi_live")
+        cal = _safe_res(f_cal, {"events": []}, 12.0, "calendar")
+        news = _safe_res(f_news, [], 12.0, "news")
+
+    # Sync live VCB USD sell into fx_tiers latest & auto-fill SBV card from WiData if sbv.gov.vn timed out!
+    ft_latest = ((vn_money_fx.get("fx_tiers") or {}).get("latest") or {})
+    vcb_usd_sell = (vcb.get("usd") or {}).get("sell")
+    if vcb_usd_sell and ft_latest:
+        ft_latest["commercial_sell"] = round(float(vcb_usd_sell))
+        if ft_latest.get("free_sell"):
+            ft_latest["spread_free_bank"] = round(ft_latest["free_sell"] - ft_latest["commercial_sell"])
+            ft_latest["spread_free_bank_pct"] = round((ft_latest["spread_free_bank"] / ft_latest["commercial_sell"]) * 100.0, 2)
+        if ft_latest.get("ceiling"):
+            ft_latest["gap_to_ceiling"] = round(ft_latest["ceiling"] - ft_latest["commercial_sell"])
+            ft_latest["gap_to_ceiling_pct"] = round((ft_latest["gap_to_ceiling"] / ft_latest["ceiling"]) * 100.0, 2)
+
+    if not sbv.get("available") and ft_latest.get("central"):
+        c_rate = round(float(ft_latest["central"]))
+        sbv = {
+            "available": True,
+            "source": "NHNN (qua WiData / WiChart)",
+            "central_rate": c_rate,
+            "central_date": (vn_money_fx.get("fx_tiers") or {}).get("updated_at") or ft_latest.get("date"),
+            "ceiling": round(c_rate * 1.05),
+            "floor": round(c_rate * 0.95),
+            "band_pct": 5.0,
+            "ref_buy": None,
+            "ref_sell": None,
+            "ref_date": None,
+        }
+        source_status["sbv"] = {"ok": True, "fresh": True}
 
     # Prepend live Vietnam stock indices + VN-Index P/E + SJC Gold to top ticker strip!
     vn_tickers = []
@@ -3187,17 +3483,22 @@ def build_dashboard(force: bool = False) -> dict[str, Any]:
     if not sbv_clean.get("available"):
         source_status.pop("sbv", None)
 
+    degraded_sources = sorted([k for k, v in source_status.items() if not (v or {}).get("ok")])
+
     payload = {
         "meta": {
             "updated_at_vn": _now_vn().strftime("%H:%M:%S · %d/%m/%Y"),
             "updated_ts": time.time(),
             "fetch_ms": round((time.time() - t0) * 1000),
             "sources": source_status,
+            "degraded_sources": degraded_sources,
+            "degraded": bool(degraded_sources),
         },
         "kpis": kpis,
         "vn_market": vn_mkt,
         "vn_valuation": vn_val,
         "gold_vn": gold_vn,
+        "vn_money_fx": vn_money_fx,
         "inflation": {
             "cpi": cpi_s[-120:],
             "core_cpi": core_cpi_s[-120:],
