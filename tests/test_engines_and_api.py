@@ -12,7 +12,7 @@ import requests
 
 import server
 from bctc_macro_engine import extract_macro_context, run_fused_ai_analysis
-from fusion_engine import _classify_triple_convergence, send_telegram_alert
+from fusion_engine import _classify_triple_convergence, build_cio_market_diagnosis, send_telegram_alert
 from wyckoff_engine import analyze_wyckoff
 
 
@@ -63,6 +63,35 @@ class TestCoreEngines(unittest.TestCase):
             wy_stage="ACCUMULATION", wy_score=72.0, macro_score=65.0, latest_ev_kind="bullish",
         )
         self.assertEqual(diamond["tier_code"], "DIAMOND")
+
+    def test_cio_diagnosis_detects_index_distortion_and_picks(self) -> None:
+        dash = {
+            "vn_market": {
+                "indices": {"VNINDEX": {"close": 1650.0, "ytd_pct": -7.0}, "VN30": {"close": 1750.0, "ytd_pct": -13.5}},
+                "flow": {"foreign_5d_bn": -6000.0, "foreign_20d_bn": -11000.0},
+            },
+            "vn_money_fx": {
+                "interbank": {"latest": {"on": 6.1, "w1": 6.2}},
+                "fx_tiers": {"latest": {"spread_free_bank": 530, "spread_free_bank_pct": 2.04}},
+            },
+            "strategy": {"sector_playbook": [{"code": "VNFIN", "above_ma50": False}, {"code": "VNIT", "above_ma50": False}]},
+        }
+        macro_ctx = {"us_cpi": 3.7, "us_core_pce": 3.2, "us_10y": 4.4, "dxy": 104.2, "vix": 21.0, "foreign_5d_bn": -6000.0}
+        rows = [
+            {"ticker": "SAB", "company_name": "Sabeco", "sector_vi": "Tiêu dùng", "tier_code": "DIAMOND", "triple_score": 76.5, "bctc_score": 72.1, "pure_bctc_score": 76.0, "wyckoff_score": 92.6, "wyckoff_stage": "ACCUMULATION", "wyckoff_stage_label": "Tích lũy", "latest_event": "SPRING", "price": 43600, "fair_value_macro": 48400, "upside_pct": 11.1, "pe": 12.0, "pb": 2.4, "roe": 22.1, "dividend_yield": 11.6, "red_flags_count": 0, "rs_20d": 9.4, "buy_zone_1": 43000, "stop_loss": 40000},
+            {"ticker": "VIC", "company_name": "Vingroup", "sector_vi": "BĐS", "tier_code": "AVOID", "triple_score": 59.0, "bctc_score": 49.0, "pure_bctc_score": 54.0, "wyckoff_score": 85.0, "wyckoff_stage": "ACCUMULATION", "wyckoff_stage_label": "Tích lũy", "latest_event": "LPS", "price": 235000, "fair_value_macro": 78000, "upside_pct": -66.6, "pe": 42.4, "pb": 7.7, "roe": 26.0, "dividend_yield": 0.4, "red_flags_count": 5, "rs_20d": 3.5, "buy_zone_1": 0, "stop_loss": 0},
+            {"ticker": "MBB", "company_name": "MBBank", "sector_vi": "Ngân hàng", "tier_code": "VALUE_TRAP", "triple_score": 58.7, "bctc_score": 83.3, "pure_bctc_score": 89.8, "wyckoff_score": 32.6, "wyckoff_stage": "MARKDOWN", "wyckoff_stage_label": "Đè giá", "latest_event": "SPRING", "price": 18200, "fair_value_macro": 22880, "upside_pct": 25.7, "pe": 5.6, "pb": 1.1, "roe": 21.2, "dividend_yield": 4.6, "red_flags_count": 0, "rs_20d": -1.9, "buy_zone_1": 18000, "stop_loss": 16500},
+            {"ticker": "VCB", "company_name": "Vietcombank", "sector_vi": "Ngân hàng", "tier_code": "VALUE_TRAP", "triple_score": 54.0, "bctc_score": 78.0, "pure_bctc_score": 85.0, "wyckoff_score": 20.0, "wyckoff_stage": "MARKDOWN", "wyckoff_stage_label": "Đè giá", "latest_event": "SPRING", "price": 49200, "fair_value_macro": 53200, "upside_pct": 8.2, "pe": 9.8, "pb": 1.6, "roe": 17.3, "dividend_yield": 1.8, "red_flags_count": 0, "rs_20d": -8.7, "buy_zone_1": 48500, "stop_loss": 46000},
+            {"ticker": "FPT", "company_name": "FPT", "sector_vi": "Công nghệ", "tier_code": "VALUE_TRAP", "triple_score": 53.0, "bctc_score": 78.0, "pure_bctc_score": 79.0, "wyckoff_score": 18.0, "wyckoff_stage": "MARKDOWN", "wyckoff_stage_label": "Đè giá", "latest_event": "SPRING", "price": 44600, "fair_value_macro": 74800, "upside_pct": 67.7, "pe": 8.1, "pb": 1.9, "roe": 26.0, "dividend_yield": 4.0, "red_flags_count": 1, "rs_20d": -8.1, "buy_zone_1": 44000, "stop_loss": 40000},
+        ]
+        diag = build_cio_market_diagnosis(dash, rows, macro_ctx)
+        self.assertLess(diag["external_us"]["score"], 50)
+        self.assertLess(diag["internal_vn"]["score"], 50)
+        self.assertEqual(diag["index_distortion"]["level"], "HIGH")
+        self.assertIn("VIC", diag["index_distortion"]["distorter_tickers"])
+        self.assertEqual([p["ticker"] for p in diag["vn30_conviction"]["core_buy"]], ["SAB"])
+        self.assertIn("MBB", [p["ticker"] for p in diag["vn30_conviction"]["accumulate_watch"]])
+        self.assertIn("VIC", [p["ticker"] for p in diag["vn30_conviction"]["avoid_distortion"]])
 
     def test_telegram_alert_never_leaks_token_on_network_error(self) -> None:
         secret_tok = "987654321:SECRET_TOKEN_SHOULD_NEVER_LEAK_1234567"
