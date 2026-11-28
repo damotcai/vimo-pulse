@@ -2968,7 +2968,11 @@
     const degHtml = degraded.length
       ? `<span class="src-pill" style="border-color:rgba(245,158,11,0.5);color:#f59e0b" title="Nguồn tạm gián đoạn: ${esc(degraded.join(", "))}">⚠ Fallback (${degraded.length})</span>`
       : "";
-    el.innerHTML = okHtml + degHtml;
+    const dbStats = data.meta?.db_stats;
+    const dbHtml = dbStats && dbStats.total_series_points
+      ? `<span class="src-pill" style="border-color:rgba(16,185,129,0.45);color:#34d399" title="SQLite WAL Database (${dbStats.size_kb || 0} KB · ${dbStats.sources_count || 0} nguồn)">DB ${Number(dbStats.total_series_points).toLocaleString("vi-VN")} điểm</span>`
+      : "";
+    el.innerHTML = dbHtml + okHtml + degHtml;
   }
 
   // Render only visible workspace panes (or all panes in Toàn cảnh mode)
@@ -3017,53 +3021,106 @@
   }
 
   // =========================================================================
-  // Progressive Fast Paint -> Automatic Live Sync on Every Visit
   // =========================================================================
+  // Instant SQLite DB Load + Smart Per-Source Incremental Sync (v11)
+  // =========================================================================
+  const LOCAL_DASH_KEY = "vimo_dash_snap_v11";
 
-  async function fetchDashboard(mode = "live", force = false, retryCount = 0) {
+  function hydrateLocalDashboardSnapshot() {
+    try {
+      const raw = localStorage.getItem(LOCAL_DASH_KEY);
+      if (!raw) return false;
+      const parsed = JSON.parse(raw);
+      const ts = parsed?.meta?.updated_ts || 0;
+      const ageSec = (Date.now() / 1000) - Number(ts);
+      if (!parsed?.kpis || ageSec > 12 * 3600) return false;
+      renderDashboard(parsed);
+      setStatus("syncing", "Đã nạp tức thì từ bộ nhớ · đang kiểm tra dữ liệu mới...");
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function persistLocalDashboardSnapshot(data) {
+    try {
+      if (!data || !data.kpis || data._stale_skipped) return;
+      const cpiLen = (data.inflation?.core_cpi || []).length;
+      const vniLen = (data.vn_market?.indices?.VNINDEX?.series || []).length;
+      if (cpiLen === 0 && vniLen === 0) return;
+      localStorage.setItem(LOCAL_DASH_KEY, JSON.stringify(data));
+    } catch (_) {
+      // Ignore storage quota errors gracefully
+    }
+  }
+
+  async function fetchDashboard(mode = "smart", force = false, retryCount = 0, userCheck = false) {
     const btn = $("#btn-refresh");
-    if (mode === "live") {
-      setStatus("syncing", force ? "Đang làm mới toàn bộ..." : "Đang cập nhật dữ liệu mới nhất...");
+    const isSyncMode = mode === "smart" || mode === "live";
+    if (isSyncMode) {
+      setStatus(
+        "syncing",
+        force
+          ? "Đang làm mới toàn bộ nguồn..."
+          : userCheck
+          ? "Đang rà soát từng nguồn dữ liệu..."
+          : "Đang kiểm tra dữ liệu mới..."
+      );
       if (btn) btn.classList.add("spinning");
     }
 
     try {
-      const url = `/api/dashboard?mode=${mode}${force ? "&force=1" : ""}`;
+      const params = new URLSearchParams({ mode });
+      if (force) params.set("force", "1");
+      if (userCheck) params.set("check", "1");
+      const url = `/api/dashboard?${params.toString()}`;
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
 
-      // If fast cache was stale (>4h old), skip painting old data and proceed cleanly to live sync!
-      if (mode === "fast" && data._stale_skipped) {
-        setStatus("syncing", "Đang đồng bộ dữ liệu trực tuyến hôm nay...");
+      if ((mode === "db" || mode === "fast") && data._stale_skipped) {
+        if (!state.data) setStatus("syncing", "Đang nạp dữ liệu lần đầu vào SQLite DB...");
         return true;
       }
 
       renderDashboard(data);
+      persistLocalDashboardSnapshot(data);
 
       const updated = data.meta?.updated_at_vn || "";
       const parts = updated.split("·").map((s) => s.trim());
       const hm = (parts[0] || "").slice(0, 5);
       const dm = (parts[1] || "").slice(0, 5);
       const stamp = hm && dm ? `${hm} · ${dm}` : (parts[0] || updated);
-      if (mode === "live") {
-        setStatus("ok", `Cập nhật ${stamp}`);
+      const sr = data.meta?.sync_report;
+
+      if (isSyncMode) {
+        if (userCheck && sr) {
+          const added = (sr.updated || 0) + (sr.repaired || 0);
+          const pts = sr.total_new_points || 0;
+          if (added > 0) {
+            setStatus("ok", `DB +${added} nguồn${pts > 0 ? ` (+${pts} điểm)` : ""} · ${hm}`);
+          } else {
+            setStatus("ok", `DB đã mới nhất (${sr.db_cached || 0} sẵn) · ${hm}`);
+          }
+        } else {
+          setStatus("ok", `Cập nhật ${stamp}`);
+        }
       } else {
-        setStatus("syncing", "Đang đồng bộ mới nhất...");
+        setStatus("syncing", "Đang rà soát dữ liệu mới...");
       }
       return true;
     } catch (err) {
       console.error("Dashboard load error:", err);
-      if (mode === "live" && retryCount < 1) {
+      if (isSyncMode && retryCount < 1) {
         setStatus("syncing", "Máy chủ đang khởi động, thử lại...");
         await new Promise((r) => setTimeout(r, 2500));
-        return fetchDashboard(mode, force, retryCount + 1);
+        return fetchDashboard(mode, force, retryCount + 1, userCheck);
       }
-      if (mode === "live") setStatus("error", "Lỗi kết nối mạng");
+      if (isSyncMode) setStatus("error", state.data ? "Giữ dữ liệu DB · mất mạng tạm" : "Lỗi kết nối mạng");
       return false;
     } finally {
-      if (mode === "live" && btn) btn.classList.remove("spinning");
+      if (isSyncMode && btn) btn.classList.remove("spinning");
     }
   }
 
@@ -3134,8 +3191,11 @@
     });
     $("#sidebar-backdrop")?.addEventListener("click", closeMobileDrawer);
 
-    // Manual Full Refresh & Instant US 3-Star Calendar Refresh
-    $("#btn-refresh")?.addEventListener("click", () => fetchDashboard("live", true));
+    // Smart Per-Source Incremental Refresh (Shift+Click forces full re-check, still DB-protected!)
+    $("#btn-refresh")?.addEventListener("click", (e) => {
+      const hardForce = !!(e && e.shiftKey);
+      fetchDashboard("smart", hardForce, 0, true);
+    });
     $("#btn-cal-refresh")?.addEventListener("click", () => refreshCalendarOnly(true));
 
     // KPI Cards quick jump to deep-dive workspace tab
@@ -3272,8 +3332,12 @@
     applySidebarState(state.sidebarCollapsed);
     initEvents();
     loadWatchlist();
-    await fetchDashboard("fast", false);
-    await fetchDashboard("live", false);
+    // Layer 0: 0ms paint from localStorage snapshot if available
+    hydrateLocalDashboardSnapshot();
+    // Layer 1: Instant SQLite DB paint (<50ms)
+    await fetchDashboard("db", false);
+    // Layer 2: Smart per-source sync (fetches ONLY missing/expired sources, appends new points)
+    await fetchDashboard("smart", false);
 
     // Auto-poll live US 3-star economic calendar every 30s when page is visible
     calPollTimer = setInterval(() => {
