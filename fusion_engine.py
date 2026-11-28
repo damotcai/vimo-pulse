@@ -355,6 +355,7 @@ def build_triple_fusion_matrix(
         "summary": summary_text,
         "rows": rows,
         "failed_tickers": sorted(failed_tickers),
+        "cio_diagnosis": build_cio_market_diagnosis(dashboard, rows, macro_ctx),
     }
 
     with _fusion_lock:
@@ -363,6 +364,348 @@ def build_triple_fusion_matrix(
             del _fusion_cache[oldest_k]
         _fusion_cache[cache_key] = (time.time(), payload)
     return payload
+
+
+def _build_pick_thesis(row: dict[str, Any], bucket: str) -> str:
+    """Sinh luận điểm đầu tư CIO súc tích theo dữ liệu thực tế BCTC × Wyckoff × Vĩ mô."""
+    pe = row.get("pe")
+    pb = row.get("pb")
+    roe = row.get("roe")
+    dy = row.get("dividend_yield") or 0
+    up = row.get("upside_pct") or 0
+    rs = row.get("rs_20d")
+    ev = row.get("latest_event") or "—"
+
+    if bucket == "CORE_BUY":
+        parts = []
+        if dy and dy >= 6.0:
+            parts.append(f"Cổ tức tiền mặt {dy:.1f}%/năm (phòng thủ lãi suất cực tốt)")
+        if roe and roe >= 18.0:
+            parts.append(f"ROE {roe:.1f}% · P/E {pe:.1f}x")
+        if up >= 8.0:
+            parts.append(f"Upside chỉnh Vĩ mô {up:+.1f}%")
+        parts.append(f"Wyckoff {row.get('wyckoff_score', 0):.0f}/100 ({row.get('wyckoff_stage_label')})")
+        if rs is not None and rs > 0:
+            parts.append(f"RS20 {rs:+.1f}% khỏe hơn VNI")
+        return " · ".join(parts)
+
+    if bucket == "ACCUMULATE_WATCH":
+        if row.get("wyckoff_stage") == "ACCUMULATION":
+            return (
+                f"Đang xây nền Tích lũy · Định giá chiết khấu (P/E {pe or '—'}x, P/B {pb or '—'}x, Upside {up:+.1f}%) "
+                f"→ Chia lệnh gom từng phần quanh vùng hỗ trợ."
+            )
+        return (
+            f"BCTC siêu hạng ({row.get('pure_bctc_score', 0):.0f}/100, ROE {roe or '—'}%, Upside {up:+.1f}%) "
+            f"nhưng đang Pha Đè giá (tín hiệu {ev}) → CHỜ xác nhận giữ đáy Spring/LPS trước khi giải ngân."
+        )
+
+    # AVOID_DISTORTION
+    return (
+        f"Cảnh báo kéo chỉ số / định giá quá nóng: P/E {pe or '—'}x, P/B {pb or '—'}x, "
+        f"Upside {up:+.1f}%, {row.get('red_flags_count', 0)} cờ đỏ BCTC → Không đuổi theo nhịp kéo trụ!"
+    )
+
+
+def build_cio_market_diagnosis(
+    dashboard: dict[str, Any] | None,
+    fusion_rows: list[dict[str, Any]],
+    macro_ctx: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Chẩn đoán CIO chuyên sâu:
+      1. Bóc tách 2 động cơ: Vĩ mô Ngoại sinh (Mỹ/Toàn cầu) vs Áp lực Nội tại VN (LSLNH, Tỷ giá Chợ đen, Khối ngoại, Độ rộng)
+      2. Radar phát hiện 'Xanh vỏ Đỏ lòng' (Index Distortion): VN-Index vs Độ rộng thực tế VN30 & các mã trụ kéo ảo
+      3. Tuyển chọn cổ phiếu VN30 đáng đầu tư nhất (Core Buy / Canh Gom & Chờ Spring / Tránh Kéo Trụ Ảo)
+    """
+    dash = dashboard or {}
+    st = dash.get("strategy") or {}
+    vn_mkt = dash.get("vn_market") or {}
+    indices = vn_mkt.get("indices") or {}
+    vni = indices.get("VNINDEX") or {}
+    vn30_idx = indices.get("VN30") or {}
+    flow = vn_mkt.get("flow") or {}
+    vnmfx = dash.get("vn_money_fx") or {}
+    ib_latest = (vnmfx.get("interbank") or {}).get("latest") or {}
+    fx_latest = (vnmfx.get("fx_tiers") or {}).get("latest") or {}
+    sectors = st.get("sector_playbook") or vn_mkt.get("sectors") or []
+
+    # --- 1. External US/Global Macro Score (0-100) ---
+    us_cpi = float(macro_ctx.get("us_cpi") or 2.8)
+    us_pce = float(macro_ctx.get("us_core_pce") or 2.6)
+    us_10y = float(macro_ctx.get("us_10y") or 4.0)
+    dxy = float(macro_ctx.get("dxy") or 102.0)
+    vix = float(macro_ctx.get("vix") or 18.0)
+
+    ext_score = 100.0
+    ext_reasons: list[str] = []
+    if us_cpi >= 3.2:
+        ext_score -= 22
+        ext_reasons.append(f"US CPI nóng ({us_cpi:.2f}%)")
+    elif us_cpi >= 2.7:
+        ext_score -= 10
+        ext_reasons.append(f"US CPI dai dẳng ({us_cpi:.2f}%)")
+    if us_pce >= 3.0:
+        ext_score -= 18
+        ext_reasons.append(f"Core PCE cao ({us_pce:.2f}%)")
+    elif us_pce >= 2.6:
+        ext_score -= 8
+    if us_10y >= 4.5:
+        ext_score -= 20
+        ext_reasons.append(f"US 10Y cao ({us_10y:.2f}%)")
+    elif us_10y >= 4.0:
+        ext_score -= 10
+        ext_reasons.append(f"US 10Y neo cao ({us_10y:.2f}%)")
+    if dxy >= 104.0:
+        ext_score -= 15
+        ext_reasons.append(f"DXY mạnh ({dxy:.1f})")
+    elif dxy >= 101.5:
+        ext_score -= 7
+    if vix >= 25.0:
+        ext_score -= 15
+        ext_reasons.append(f"VIX hoảng loạn ({vix:.1f})")
+    elif vix >= 20.0:
+        ext_score -= 8
+    ext_score = round(_clamp(ext_score, 5.0, 98.0), 1)
+    ext_tone = "emerald" if ext_score >= 65 else ("amber" if ext_score >= 45 else "rose")
+    ext_label = "Thuận lợi (Mỹ nới lỏng)" if ext_score >= 65 else ("Trung tính / Giằng co" if ext_score >= 45 else "Áp lực Thắt chặt từ Mỹ")
+
+    # --- 2. Vietnam Internal Liquidity & Flow Score (0-100) ---
+    ib_on = ib_latest.get("on")
+    ib_1w = ib_latest.get("w1")
+    fx_spread_pct = fx_latest.get("spread_free_bank_pct")
+    fx_spread_vnd = fx_latest.get("spread_free_bank")
+    f5 = float(flow.get("foreign_5d_bn") if flow.get("foreign_5d_bn") is not None else (macro_ctx.get("foreign_5d_bn") or 0.0))
+    f20 = float(flow.get("foreign_20d_bn") if flow.get("foreign_20d_bn") is not None else (macro_ctx.get("foreign_20d_bn") or 0.0))
+
+    int_score = 100.0
+    int_reasons: list[str] = []
+    if ib_on is not None:
+        if float(ib_on) >= 5.5:
+            int_score -= 24
+            int_reasons.append(f"LSLNH ON căng ({float(ib_on):.2f}%)")
+        elif float(ib_on) >= 4.2:
+            int_score -= 12
+            int_reasons.append(f"LSLNH ON tăng ({float(ib_on):.2f}%)")
+    if fx_spread_pct is not None:
+        if float(fx_spread_pct) >= 2.0:
+            int_score -= 20
+            int_reasons.append(f"Chợ đen vênh NHTM +{float(fx_spread_pct):.2f}%")
+        elif float(fx_spread_pct) >= 1.2:
+            int_score -= 10
+            int_reasons.append(f"Chợ đen nóng nhẹ (+{float(fx_spread_pct):.2f}%)")
+    if f20 <= -5000 or f5 <= -2500:
+        int_score -= 24
+        int_reasons.append(f"Khối ngoại xả mạnh (5p {f5:+,.0f} tỷ)")
+    elif f20 < -1500:
+        int_score -= 12
+        int_reasons.append(f"Khối ngoại bán ròng (20p {f20:+,.0f} tỷ)")
+
+    # Breadth from cached VN30 scan if already computed, else infer from fusion VN30 subset
+    vn30_breadth = None
+    with _vn30_lock:
+        if _vn30_cache is not None:
+            vn30_breadth = (_vn30_cache[1] or {}).get("breadth")
+
+    vn30_set = set(VN30_TICKERS)
+    vn30_fusion = [r for r in fusion_rows if r.get("ticker") in vn30_set]
+    if vn30_breadth:
+        total_b = max(1, int(vn30_breadth.get("total") or 30))
+        md_cnt = int(vn30_breadth.get("MARKDOWN") or 0)
+        bull_pct = float(vn30_breadth.get("bullish_pct") or 0.0)
+        md_pct = round(md_cnt / total_b * 100.0, 1)
+    else:
+        total_b = max(1, len(vn30_fusion))
+        md_cnt = sum(1 for r in vn30_fusion if r.get("wyckoff_stage") == "MARKDOWN")
+        bull_cnt = sum(1 for r in vn30_fusion if r.get("wyckoff_stage") in ("ACCUMULATION", "MARKUP"))
+        md_pct = round(md_cnt / total_b * 100.0, 1)
+        bull_pct = round(bull_cnt / total_b * 100.0, 1)
+
+    sec_above_ma50 = sum(1 for s in sectors if s.get("above_ma50"))
+    sec_total = len(sectors) or 8
+
+    if md_pct >= 65.0:
+        int_score -= 22
+        int_reasons.append(f"{md_pct:.0f}% VN30 Đè giá")
+    elif md_pct >= 45.0:
+        int_score -= 12
+    if sec_above_ma50 == 0 and sec_total > 0:
+        int_score -= 10
+        int_reasons.append(f"0/{sec_total} ngành > MA50")
+
+    int_score = round(_clamp(int_score, 5.0, 98.0), 1)
+    int_tone = "emerald" if int_score >= 65 else ("amber" if int_score >= 45 else "rose")
+    int_label = "Thanh khoản & Độ rộng Khỏe" if int_score >= 65 else ("Phân hóa Nội địa" if int_score >= 45 else "Thanh khoản Căng & Độ rộng Yếu")
+
+    # --- 3. Index Distortion ("Xanh vỏ Đỏ lòng") Detector ---
+    vni_ytd = vni.get("ytd_pct")
+    vn30_ytd = vn30_idx.get("ytd_pct")
+    ytd_gap = round(float(vni_ytd) - float(vn30_ytd), 2) if (vni_ytd is not None and vn30_ytd is not None) else None
+
+    distorters = [
+        r for r in vn30_fusion
+        if (r.get("upside_pct", 0) <= -25.0 and r.get("red_flags_count", 0) >= 3)
+        and (r.get("wyckoff_stage") in ("ACCUMULATION", "MARKUP") or (r.get("rs_20d") or 0) >= 3.0)
+    ]
+    distorters.sort(key=lambda r: r.get("upside_pct", 0))
+
+    if md_pct >= 60.0 and (distorters or (ytd_gap is not None and ytd_gap >= 3.0) or (vni_ytd is not None and float(vni_ytd) > -10.0)):
+        dist_level = "HIGH"
+        dist_tone = "rose"
+        dist_label = "XANH VỎ ĐỎ LÒNG NẶNG (Index Distortion)"
+    elif md_pct >= 45.0 or sec_above_ma50 <= 2:
+        dist_level = "MODERATE"
+        dist_tone = "amber"
+        dist_label = "PHÂN HÓA HẸP (Cần lọc mã khắt khe)"
+    else:
+        dist_level = "HEALTHY"
+        dist_tone = "emerald"
+        dist_label = "ĐỒNG THUẬN LAN TỎA (Thị trường lành mạnh)"
+
+    dist_names = [f"{r['ticker']} (P/E {r.get('pe')}x · {r.get('upside_pct'):+.0f}%)" for r in distorters[:3]]
+    dist_detail = (
+        f"VN-Index ({vni.get('close', '—')}, YTD {vni_ytd:+.1f}%) giữ điểm tốt hơn hẳn thực chất thị trường: "
+        f"{md_cnt}/{total_b} mã VN30 ({md_pct:.0f}%) đang Pha 4 Đè giá và chỉ {sec_above_ma50}/{sec_total} ngành giữ trên MA50."
+        if vni_ytd is not None
+        else f"{md_cnt}/{total_b} mã VN30 ({md_pct:.0f}%) đang Pha 4 Đè giá · {sec_above_ma50}/{sec_total} ngành trên MA50."
+    )
+    if dist_names:
+        dist_detail += f" Trụ kéo chỉ số nhưng định giá rất cao: {', '.join(dist_names)}."
+
+    # --- 4. Transmission Verdict ---
+    if ext_score < 50 and int_score < 50:
+        transmission = (
+            "KẾT LUẬN CIO: Mỹ (Ngoại sinh) là van áp suất đầu vào khiến khối ngoại rút ròng, "
+            "còn Lãi suất LNH VN & Vênh tỷ giá chợ đen (Nội sinh) là bộ khuếch đại hút thanh khoản nội địa. "
+            "KHÔNG đánh theo điểm số VN-Index — chỉ giải ngân có chọn lọc vào mã Tiền mặt/Cổ tức cao hoặc Big4 đang Tích lũy đáy."
+        )
+    elif ext_score < 50 <= int_score:
+        transmission = (
+            "KẾT LUẬN CIO: Áp lực Mỹ còn cao nhưng nội tại VN đang giữ nhịp tốt — ưu tiên cổ phiếu nội địa dẫn dắt dòng tiền (RS dương)."
+        )
+    elif int_score < 50 <= ext_score:
+        transmission = (
+            "KẾT LUẬN CIO: Vĩ mô Mỹ đã dịu nhưng thanh khoản VND & độ rộng nội địa chưa hồi — chưa vội nâng margin, gom dần nền tích lũy."
+        )
+    else:
+        transmission = (
+            "KẾT LUẬN CIO: Cả Vĩ mô Mỹ (Ngoại sinh) và Thanh khoản VN (Nội sinh) cùng đồng thuận — ưu tiên nắm giữ cổ phiếu đầu ngành VN30."
+        )
+
+    # --- 5. Curated VN30 CIO Conviction Picks ---
+    def _pack_pick(r: dict[str, Any], bucket: str) -> dict[str, Any]:
+        return {
+            "ticker": r["ticker"],
+            "company_name": r["company_name"],
+            "sector_vi": r["sector_vi"],
+            "bucket": bucket,
+            "triple_score": r["triple_score"],
+            "bctc_score": r["bctc_score"],
+            "pure_bctc_score": r["pure_bctc_score"],
+            "wyckoff_score": r["wyckoff_score"],
+            "wyckoff_stage": r["wyckoff_stage"],
+            "wyckoff_stage_label": r["wyckoff_stage_label"],
+            "latest_event": r["latest_event"],
+            "price": r["price"],
+            "fair_value_macro": r["fair_value_macro"],
+            "upside_pct": r["upside_pct"],
+            "pe": r["pe"],
+            "pb": r["pb"],
+            "roe": r["roe"],
+            "dividend_yield": r["dividend_yield"],
+            "red_flags_count": r["red_flags_count"],
+            "rs_20d": r["rs_20d"],
+            "buy_zone_1": r["buy_zone_1"],
+            "stop_loss": r["stop_loss"],
+            "thesis": _build_pick_thesis(r, bucket),
+        }
+
+    core_buy = [
+        _pack_pick(r, "CORE_BUY")
+        for r in vn30_fusion
+        if r.get("tier_code") == "DIAMOND" and r.get("red_flags_count", 0) <= 1
+    ][:4]
+
+    core_set = {x["ticker"] for x in core_buy}
+    acc_watch_raw = [
+        r for r in vn30_fusion
+        if r["ticker"] not in core_set
+        and (
+            r.get("tier_code") == "ACCUMULATE"
+            or (
+                r.get("pure_bctc_score", 0) >= 75.0
+                and r.get("red_flags_count", 0) <= 1
+                and r.get("upside_pct", 0) >= 8.0
+            )
+        )
+    ]
+    acc_watch_raw.sort(
+        key=lambda r: (
+            1 if r.get("wyckoff_stage") == "ACCUMULATION" else 0,
+            r.get("triple_score", 0),
+            r.get("pure_bctc_score", 0),
+        ),
+        reverse=True,
+    )
+    accumulate_watch = [_pack_pick(r, "ACCUMULATE_WATCH") for r in acc_watch_raw[:5]]
+
+    avoid_raw = [
+        r for r in vn30_fusion
+        if r["ticker"] not in core_set
+        and (
+            (r.get("upside_pct", 0) <= -25.0 and r.get("red_flags_count", 0) >= 3)
+            or (r.get("tier_code") == "AVOID" and r.get("red_flags_count", 0) >= 4)
+        )
+    ]
+    avoid_raw.sort(key=lambda r: (r.get("upside_pct", 0), -r.get("red_flags_count", 0)))
+    avoid_distortion = [_pack_pick(r, "AVOID_DISTORTION") for r in avoid_raw[:4]]
+
+    return {
+        "updated_at_vn": _now_vn_str(),
+        "external_us": {
+            "score": ext_score,
+            "tone": ext_tone,
+            "label": ext_label,
+            "reasons": ext_reasons or ["Mỹ ổn định · Lạm phát & DXY trong tầm kiểm soát"],
+            "metrics": {"us_cpi": us_cpi, "us_core_pce": us_pce, "us_10y": us_10y, "dxy": dxy, "vix": vix},
+        },
+        "internal_vn": {
+            "score": int_score,
+            "tone": int_tone,
+            "label": int_label,
+            "reasons": int_reasons or ["Thanh khoản VND & Dòng vốn ổn định"],
+            "metrics": {
+                "ib_on": ib_on,
+                "ib_1w": ib_1w,
+                "fx_spread_vnd": fx_spread_vnd,
+                "fx_spread_pct": fx_spread_pct,
+                "foreign_5d_bn": round(f5, 1),
+                "foreign_20d_bn": round(f20, 1),
+            },
+        },
+        "index_distortion": {
+            "level": dist_level,
+            "tone": dist_tone,
+            "label": dist_label,
+            "detail": dist_detail,
+            "vni_close": vni.get("close"),
+            "vni_ytd_pct": vni_ytd,
+            "vn30_ytd_pct": vn30_ytd,
+            "vn30_markdown_cnt": md_cnt,
+            "vn30_total": total_b,
+            "vn30_markdown_pct": md_pct,
+            "vn30_bullish_pct": bull_pct,
+            "sectors_above_ma50": sec_above_ma50,
+            "sectors_total": sec_total,
+            "distorter_tickers": [r["ticker"] for r in distorters[:4]],
+        },
+        "transmission_verdict": transmission,
+        "vn30_conviction": {
+            "core_buy": core_buy,
+            "accumulate_watch": accumulate_watch,
+            "avoid_distortion": avoid_distortion,
+        },
+    }
 
 
 def build_peer_comparison(

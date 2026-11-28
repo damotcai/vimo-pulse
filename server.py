@@ -491,6 +491,20 @@ class MacroHandler(BaseHTTPRequestHandler):
                 self._send_internal_error("GET /api/fusion/matrix", exc)
             return
 
+        if path == "/api/cio/vn30-conviction":
+            try:
+                scenario = (qs.get("scenario", ["live"])[0] or "live").lower()
+                if scenario not in VALID_SCENARIOS:
+                    scenario = "live"
+                force = qs.get("force", ["0"])[0] in ("1", "true", "yes")
+                dash = _latest_payload or get_cached_dashboard() or get_dashboard_payload(mode="live", force=False)
+                macro_ctx = _get_live_macro_context(scenario=scenario)
+                mat = build_triple_fusion_matrix(dash, macro_ctx, scenario=scenario, force=force)
+                self._send_json(mat.get("cio_diagnosis") or {})
+            except Exception as exc:
+                self._send_internal_error("GET /api/cio/vn30-conviction", exc)
+            return
+
         if path == "/api/bctc/peers":
             try:
                 raw_t = (qs.get("tickers", [""])[0] or "").strip()
