@@ -183,9 +183,15 @@ class TestHardenedHTTPServer(unittest.TestCase):
         self.assertEqual(json.loads(raw)["status"], "ok")
 
     def test_oversized_post_body_returns_413(self) -> None:
-        big = b"{" + b"a" * (server.MAX_BODY_BYTES + 100) + b"}"
-        status, _, _ = self._request("POST", "/api/alerts/telegram", body=big)
-        self.assertEqual(status, 413)
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.putrequest("POST", "/api/alerts/telegram")
+        conn.putheader("Content-Type", "application/json")
+        conn.putheader("Content-Length", str(server.MAX_BODY_BYTES + 100))
+        conn.endheaders()
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        self.assertEqual(resp.status, 413)
 
     def test_invalid_json_returns_400(self) -> None:
         status, _, _ = self._request("POST", "/api/alerts/telegram", body=b"{not-json")
